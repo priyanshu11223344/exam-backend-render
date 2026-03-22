@@ -5,7 +5,7 @@ const cors=require("cors")
 app.use(express.json());
 app.use(
     cors({
-      origin: "https://exam-frontend-iota.vercel.app/",
+      origin: "https://exam-frontend-iota.vercel.app",
       credentials: true,
     })
   );
