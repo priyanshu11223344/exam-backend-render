@@ -7,16 +7,14 @@ const Topic = require("../models/Topic");
 const Paper = require("../models/Paper");
 
 /* ===============================
-   Helper Functions
+   HELPERS
 ================================= */
 
-// Clean URL
 const cleanUrl = (url) => {
-  if (!url) return null;
+  if (!url) return "";
   return url.toString().replace(/^"|"$/g, "").trim();
 };
 
-// Detect file type
 const detectFileType = (url) => {
   if (!url) return "link";
 
@@ -28,9 +26,7 @@ const detectFileType = (url) => {
     lower.includes(".png") ||
     lower.includes(".jpg") ||
     lower.includes(".jpeg") ||
-    lower.includes(".webp") ||
-    lower.includes("lh3.googleusercontent.com") ||
-    lower.includes("imgur.com")
+    lower.includes(".webp")
   ) {
     return "image";
   }
@@ -38,24 +34,36 @@ const detectFileType = (url) => {
   return "link";
 };
 
-// 🔥 FINAL BUILD FUNCTION
-const buildFileArray = (field) => {
+const normalizeLinks = (field) => {
   if (!field) return [];
-
   return field
     .toString()
     .split("|")
-    .map((link) => link.trim())
-    .filter((link) => link.length > 0)
-    .map((link) => {
-      const cleaned = cleanUrl(link);
+    .map((l) => cleanUrl(l))
+    .filter(Boolean);
+};
 
-      return {
-        fileType: detectFileType(cleaned),
-        url: cleaned,
-        status: "pending", // 🔥 ALWAYS pending
-      };
-    });
+const isSameArray = (arr1, arr2) => {
+  if (arr1.length !== arr2.length) return false;
+  return arr1.every((v, i) => v === arr2[i]);
+};
+
+// ✅ MERGE USING originalUrl
+const mergeFiles = (oldFiles, newLinks) => {
+  return newLinks.map((link) => {
+    const existing = oldFiles.find(
+      (f) => f.originalUrl === link
+    );
+
+    if (existing) return existing;
+
+    return {
+      fileType: detectFileType(link),
+      originalUrl: link,
+      cloudinaryUrl: null,
+      status: "pending",
+    };
+  });
 };
 
 /* ===============================
@@ -67,15 +75,12 @@ exports.uploadExcel = async (req, res) => {
   session.startTransaction();
 
   try {
-    if (!req.file) {
-      return res.status(400).json({ message: "No file uploaded" });
-    }
-
     const workbook = XLSX.readFile(req.file.path);
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
     const rows = XLSX.utils.sheet_to_json(sheet);
 
     let inserted = 0;
+    let updated = 0;
     let skipped = 0;
 
     for (const row of rows) {
@@ -87,17 +92,17 @@ exports.uploadExcel = async (req, res) => {
         season,
         paperNumber,
         variant,
+        questionNumber,
         questionPaper,
         markScheme,
         explanation,
         specialComment,
       } = row;
 
-      if (!board || !subject || !topic) continue;
+      if (!board || !subject || !topic || !questionNumber) continue;
 
       /* ===== BOARD ===== */
       let boardDoc = await Board.findOne({ name: board }).session(session);
-
       if (!boardDoc) {
         boardDoc = (await Board.create([{ name: board }], { session }))[0];
       }
@@ -132,72 +137,132 @@ exports.uploadExcel = async (req, res) => {
         )[0];
       }
 
-      /* ===== DUPLICATE CHECK ===== */
-      const existingPaper = await Paper.findOne({
+      const qpLinks = normalizeLinks(questionPaper);
+      const msLinks = normalizeLinks(markScheme);
+
+      const existing = await Paper.findOne({
         topic: topicDoc._id,
         year,
         season,
         paperNumber,
         variant,
+        questionNumber,
       }).session(session);
 
-      if (existingPaper) {
-        skipped++;
-        continue;
+      if (existing) {
+        const existingQP = (existing.questionPaper || []).map(
+          (f) => f.originalUrl
+        );
+
+        const existingMS = (existing.markScheme || []).map(
+          (f) => f.originalUrl
+        );
+
+        const sameQP = isSameArray(existingQP, qpLinks);
+        const sameMS = isSameArray(existingMS, msLinks);
+
+        const sameExplanation =
+          cleanUrl(existing.explanation?.originalUrl) === cleanUrl(explanation);
+
+        const sameComment =
+          cleanUrl(existing.specialComment?.originalUrl) === cleanUrl(specialComment);
+
+        if (sameQP && sameMS && sameExplanation && sameComment) {
+          skipped++;
+          continue;
+        }
+
+        if (!sameQP) {
+          existing.questionPaper = mergeFiles(
+            existing.questionPaper || [],
+            qpLinks
+          );
+        }
+
+        if (!sameMS) {
+          existing.markScheme = mergeFiles(
+            existing.markScheme || [],
+            msLinks
+          );
+        }
+
+        if (!sameExplanation) {
+          existing.explanation = explanation
+            ? {
+                fileType: detectFileType(explanation),
+                originalUrl: cleanUrl(explanation),
+                cloudinaryUrl: null,
+                status: "pending",
+              }
+            : undefined;
+        }
+
+        if (!sameComment) {
+          existing.specialComment = specialComment
+            ? {
+                fileType: detectFileType(specialComment),
+                originalUrl: cleanUrl(specialComment),
+                cloudinaryUrl: null,
+                status: "pending",
+              }
+            : undefined;
+        }
+
+        if (!existing.isModified()) {
+          skipped++;
+          continue;
+        }
+
+        await existing.save({ session });
+        updated++;
+      } else {
+        await Paper.create(
+          [
+            {
+              topic: topicDoc._id,
+              topicName: topicDoc.name,
+              year,
+              season,
+              paperNumber,
+              variant,
+              questionNumber,
+
+              questionPaper: mergeFiles([], qpLinks),
+              markScheme: mergeFiles([], msLinks),
+
+              explanation: explanation
+                ? {
+                    fileType: detectFileType(explanation),
+                    originalUrl: cleanUrl(explanation),
+                    cloudinaryUrl: null,
+                    status: "pending",
+                  }
+                : undefined,
+
+              specialComment: specialComment
+                ? {
+                    fileType: detectFileType(specialComment),
+                    originalUrl: cleanUrl(specialComment),
+                    cloudinaryUrl: null,
+                    status: "pending",
+                  }
+                : undefined,
+            },
+          ],
+          { session }
+        );
+
+        inserted++;
       }
-
-      /* ===== CREATE PAPER ===== */
-      await Paper.create(
-        [
-          {
-            topic: topicDoc._id,
-            topicName: topicDoc.name,
-            year,
-            season,
-            paperNumber,
-            variant,
-
-            questionPaper: buildFileArray(questionPaper),
-            markScheme: buildFileArray(markScheme),
-
-            explanation: explanation
-              ? {
-                  fileType: detectFileType(explanation),
-                  url: cleanUrl(explanation),
-                }
-              : undefined,
-
-            specialComment: specialComment
-              ? {
-                  fileType: detectFileType(specialComment),
-                  url: cleanUrl(specialComment),
-                }
-              : undefined,
-          },
-        ],
-        { session }
-      );
-
-      inserted++;
     }
 
     await session.commitTransaction();
     session.endSession();
 
-    return res.status(200).json({
-      message: "Uploaded instantly 🚀",
-      inserted,
-      skipped,
-    });
-  } catch (error) {
+    res.json({ inserted, updated, skipped });
+  } catch (err) {
     await session.abortTransaction();
     session.endSession();
-
-    console.error(error);
-
-    return res.status(500).json({
-      message: "Upload failed",
-      error: error.message,
-    });
+    res.status(500).json({ error: err.message });
   }
 };
