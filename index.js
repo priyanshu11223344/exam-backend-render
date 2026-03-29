@@ -5,7 +5,7 @@ const cors=require("cors")
 app.use(express.json());
 app.use(
     cors({
-      origin: "https://exam-frontend-iota.vercel.app",
+      origin: "http://localhost:5173",
       credentials: true,
     })
   );
@@ -18,7 +18,13 @@ app.use("/api/boards",boardRoutes);
 app.use("/api/subjects",subjectRoutes);
 app.use("/api/topics",topicRoutes);
 app.use("/api/papers",paperRoutes);
-app.use("/api/admin",adminUpload)
+app.use("/api/admin",adminUpload);
+const paperNameRoutes = require("./routes/paperNameRoutes");
+// server.js / app.js
+
+
+
+app.use("/api/paperName", paperNameRoutes);
 const startUploader = require("./utils/backgroundUploader");
 
 

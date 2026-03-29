@@ -64,8 +64,10 @@ const paperSchema = new mongoose.Schema(
       required: true,
     },
 
-    paperNumber: {
-      type: Number,
+    // 🔥 NEW FIELD (replaces paperNumber)
+    paperName: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "PaperName",
       required: true,
     },
 
@@ -110,7 +112,7 @@ paperSchema.index(
     topic: 1,
     year: 1,
     season: 1,
-    paperNumber: 1,
+    paperName: 1, // 🔥 updated
     variant: 1,
     questionNumber: 1,
   },

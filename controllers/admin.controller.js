@@ -5,6 +5,7 @@ const Board = require("../models/Board");
 const Subject = require("../models/Subject");
 const Topic = require("../models/Topic");
 const Paper = require("../models/Paper");
+const PaperName = require("../models/PaperName"); // 🔥 added
 
 /* ===============================
    HELPERS
@@ -90,7 +91,7 @@ exports.uploadExcel = async (req, res) => {
         topic,
         year,
         season,
-        paperNumber,
+        paperName, // 🔥 changed
         variant,
         questionNumber,
         questionPaper,
@@ -99,7 +100,7 @@ exports.uploadExcel = async (req, res) => {
         specialComment,
       } = row;
 
-      if (!board || !subject || !topic || !questionNumber) continue;
+      if (!board || !subject || !topic || !questionNumber || !paperName) continue;
 
       /* ===== BOARD ===== */
       let boardDoc = await Board.findOne({ name: board }).session(session);
@@ -137,6 +138,21 @@ exports.uploadExcel = async (req, res) => {
         )[0];
       }
 
+      // 🔥 PAPER NAME HANDLING
+      let paperNameDoc = await PaperName.findOne({
+        subjectId: subjectDoc._id,
+        name: paperName,
+      }).session(session);
+
+      if (!paperNameDoc) {
+        paperNameDoc = (
+          await PaperName.create(
+            [{ subjectId: subjectDoc._id, name: paperName }],
+            { session }
+          )
+        )[0];
+      }
+
       const qpLinks = normalizeLinks(questionPaper);
       const msLinks = normalizeLinks(markScheme);
 
@@ -144,7 +160,7 @@ exports.uploadExcel = async (req, res) => {
         topic: topicDoc._id,
         year,
         season,
-        paperNumber,
+        paperName: paperNameDoc._id, // 🔥 changed
         variant,
         questionNumber,
       }).session(session);
@@ -223,7 +239,7 @@ exports.uploadExcel = async (req, res) => {
               topicName: topicDoc.name,
               year,
               season,
-              paperNumber,
+              paperName: paperNameDoc._id, // 🔥 changed
               variant,
               questionNumber,
 
