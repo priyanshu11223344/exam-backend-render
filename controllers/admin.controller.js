@@ -91,29 +91,52 @@ exports.uploadExcel = async (req, res) => {
         topic,
         year,
         season,
-        paperName, // 🔥 changed
+        paperName,
         variant,
         questionNumber,
         questionPaper,
         markScheme,
+        correctAnswer,
         explanation,
         specialComment,
       } = row;
-
-      if (!board || !subject || !topic || !questionNumber || !paperName) continue;
-
+    
+      // ✅ Detect MCQ (better + case safe)
+      const normalizedPaperName = paperName?.toString().trim().toLowerCase();
+      const mcqPapers = ["1", "2", "1(core)", "2(extended)"];
+      const isMCQ = mcqPapers.includes(normalizedPaperName);
+    
+      const finalCorrectAnswer =
+        isMCQ && correctAnswer
+          ? correctAnswer.toString().trim().toUpperCase()
+          : null;
+    
+      const validAnswers = ["A", "B", "C", "D"];
+    
+      if (isMCQ && finalCorrectAnswer && !validAnswers.includes(finalCorrectAnswer)) {
+        console.log(`Invalid answer at question ${questionNumber}`);
+        skipped++;
+        continue;
+      }
+    
+      // ✅ FIXED CONDITION (topic removed)
+      if (!board || !subject || !questionNumber || !paperName) {
+        skipped++;
+        continue;
+      }
+    
       /* ===== BOARD ===== */
       let boardDoc = await Board.findOne({ name: board }).session(session);
       if (!boardDoc) {
         boardDoc = (await Board.create([{ name: board }], { session }))[0];
       }
-
+    
       /* ===== SUBJECT ===== */
       let subjectDoc = await Subject.findOne({
         name: subject,
         board: boardDoc._id,
       }).session(session);
-
+    
       if (!subjectDoc) {
         subjectDoc = (
           await Subject.create(
@@ -122,28 +145,32 @@ exports.uploadExcel = async (req, res) => {
           )
         )[0];
       }
-
-      /* ===== TOPIC ===== */
-      let topicDoc = await Topic.findOne({
-        name: topic,
-        subject: subjectDoc._id,
-      }).session(session);
-
-      if (!topicDoc) {
-        topicDoc = (
-          await Topic.create(
-            [{ name: topic, subject: subjectDoc._id }],
-            { session }
-          )
-        )[0];
+    
+      /* ===== TOPIC (OPTIONAL NOW) ===== */
+      let topicDoc = null;
+    
+      if (topic && topic.toString().trim() !== "") {
+        topicDoc = await Topic.findOne({
+          name: topic,
+          subject: subjectDoc._id,
+        }).session(session);
+    
+        if (!topicDoc) {
+          topicDoc = (
+            await Topic.create(
+              [{ name: topic, subject: subjectDoc._id }],
+              { session }
+            )
+          )[0];
+        }
       }
-
-      // 🔥 PAPER NAME HANDLING
+    
+      /* ===== PAPER NAME ===== */
       let paperNameDoc = await PaperName.findOne({
         subjectId: subjectDoc._id,
         name: paperName,
       }).session(session);
-
+    
       if (!paperNameDoc) {
         paperNameDoc = (
           await PaperName.create(
@@ -152,56 +179,60 @@ exports.uploadExcel = async (req, res) => {
           )
         )[0];
       }
-
+    
       const qpLinks = normalizeLinks(questionPaper);
       const msLinks = normalizeLinks(markScheme);
-
+    
+      /* ===== FIND EXISTING ===== */
       const existing = await Paper.findOne({
-        topic: topicDoc._id,
+        topic: topicDoc ? topicDoc._id : undefined, // ✅ FIXED
         year,
         season,
-        paperName: paperNameDoc._id, // 🔥 changed
+        paperName: paperNameDoc._id,
         variant,
         questionNumber,
       }).session(session);
-
+    
       if (existing) {
         const existingQP = (existing.questionPaper || []).map(
           (f) => f.originalUrl
         );
-
+    
         const existingMS = (existing.markScheme || []).map(
           (f) => f.originalUrl
         );
-
+    
         const sameQP = isSameArray(existingQP, qpLinks);
         const sameMS = isSameArray(existingMS, msLinks);
-
+    
         const sameExplanation =
           cleanUrl(existing.explanation?.originalUrl) === cleanUrl(explanation);
-
+    
         const sameComment =
           cleanUrl(existing.specialComment?.originalUrl) === cleanUrl(specialComment);
-
+    
+        existing.isMCQ = isMCQ;
+        existing.correctAnswer = finalCorrectAnswer;
+    
         if (sameQP && sameMS && sameExplanation && sameComment) {
           skipped++;
           continue;
         }
-
+    
         if (!sameQP) {
           existing.questionPaper = mergeFiles(
             existing.questionPaper || [],
             qpLinks
           );
         }
-
+    
         if (!sameMS) {
           existing.markScheme = mergeFiles(
             existing.markScheme || [],
             msLinks
           );
         }
-
+    
         if (!sameExplanation) {
           existing.explanation = explanation
             ? {
@@ -212,7 +243,7 @@ exports.uploadExcel = async (req, res) => {
               }
             : undefined;
         }
-
+    
         if (!sameComment) {
           existing.specialComment = specialComment
             ? {
@@ -223,29 +254,30 @@ exports.uploadExcel = async (req, res) => {
               }
             : undefined;
         }
-
+    
         if (!existing.isModified()) {
           skipped++;
           continue;
         }
-
+    
         await existing.save({ session });
         updated++;
       } else {
         await Paper.create(
           [
             {
-              topic: topicDoc._id,
-              topicName: topicDoc.name,
+              topic: topicDoc ? topicDoc._id : undefined, // ✅ FIXED
+              topicName: topicDoc ? topicDoc.name : undefined, // ✅ FIXED
               year,
               season,
-              paperName: paperNameDoc._id, // 🔥 changed
+              paperName: paperNameDoc._id,
               variant,
               questionNumber,
-
+              isMCQ,
+              correctAnswer: finalCorrectAnswer,
               questionPaper: mergeFiles([], qpLinks),
               markScheme: mergeFiles([], msLinks),
-
+    
               explanation: explanation
                 ? {
                     fileType: detectFileType(explanation),
@@ -254,7 +286,7 @@ exports.uploadExcel = async (req, res) => {
                     status: "pending",
                   }
                 : undefined,
-
+    
               specialComment: specialComment
                 ? {
                     fileType: detectFileType(specialComment),
@@ -267,11 +299,10 @@ exports.uploadExcel = async (req, res) => {
           ],
           { session }
         );
-
+    
         inserted++;
       }
     }
-
     await session.commitTransaction();
     session.endSession();
 
@@ -279,6 +310,7 @@ exports.uploadExcel = async (req, res) => {
   } catch (err) {
     await session.abortTransaction();
     session.endSession();
+    console.log("error is",err.message)
     res.status(500).json({ error: err.message });
   }
 };

@@ -46,7 +46,7 @@ const paperSchema = new mongoose.Schema(
     topic: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Topic",
-      required: true,
+      required: false,
     },
 
     topicName: {
@@ -80,7 +80,16 @@ const paperSchema = new mongoose.Schema(
       type: Number,
       required: true,
     },
-
+    isMCQ:{
+     type:Boolean,
+     default:false
+    },
+    correctAnswer:{
+      type:String,
+      enum:["A","B","C","D",null],
+      uppercase:true,
+      default:null
+    },
     questionPaper: {
       type: [fileSchema],
       required: true,
@@ -123,6 +132,7 @@ paperSchema.index(
 paperSchema.index({ topic: 1, year: 1 });
 
 // 🔥 VERY IMPORTANT (background job speed)
+paperSchema.index({isMCQ:1});
 paperSchema.index({ "questionPaper.status": 1 });
 paperSchema.index({ "markScheme.status": 1 });
 

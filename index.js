@@ -21,12 +21,13 @@ app.use("/api/papers",paperRoutes);
 app.use("/api/admin",adminUpload)
 const startUploader = require("./utils/backgroundUploader");
 const paperNameRoutes = require("./routes/paperNameRoutes");
+const quizRoutes=require("./routes/quiz.routes");
 // server.js / app.js
 
 
 
 app.use("/api/paperName", paperNameRoutes);
-
+app.use("/api/quiz",quizRoutes);
 ConnectDb().then(() => {
   console.log("✅ DB Connected");
 
