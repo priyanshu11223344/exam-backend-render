@@ -1,7 +1,7 @@
 const Topic = require("../models/Topic");
 const Subject = require("../models/Subject");
 const Paper = require("../models/Paper");
-
+const getUserFeatures = require("../utils/getUserFeatures");
 exports.createPaper = async (req, res) => {
   try {
     const {
@@ -71,14 +71,24 @@ exports.getPapersByTopic = async (req, res) => {
     const limit = 10;
     const skip = (page - 1) * limit;
 
-    const papers = await Paper.find({ topic: topicId })
-      .populate("paperName", "name") // ✅ FIXED
+    // ✅ GET USER FEATURES
+    const { features } = await getUserFeatures(req);
+
+    let filter = { topic: topicId };
+
+    // ✅ APPLY YEAR RESTRICTION
+    if (!features.includes("years_access")) {
+      filter.year = { $lte: 2019 };
+    }
+
+    const papers = await Paper.find(filter)
+      .populate("paperName", "name")
       .sort({ year: -1 })
       .skip(skip)
       .limit(limit)
       .lean();
 
-    const total = await Paper.countDocuments({ topic: topicId });
+    const total = await Paper.countDocuments(filter);
 
     res.status(200).json({
       success: true,
@@ -103,6 +113,8 @@ exports.filterPapers = async (req, res) => {
       variant,
     } = req.query;
 
+    const { features } = await getUserFeatures(req);
+
     const filter = {};
 
     // Topics
@@ -121,6 +133,11 @@ exports.filterPapers = async (req, res) => {
       filter.year = { $in: yearArray };
     }
 
+    // ❗ FORCE RESTRICTION
+    if (!features.includes("years_access")) {
+      filter.year = { $lte: 2019 };
+    }
+
     // Seasons
     if (seasons) {
       const seasonArray = Array.isArray(seasons)
@@ -129,7 +146,7 @@ exports.filterPapers = async (req, res) => {
       filter.season = { $in: seasonArray };
     }
 
-    // PaperName (ObjectId)
+    // PaperName
     if (paperName) {
       const paperArray = Array.isArray(paperName)
         ? paperName
@@ -137,7 +154,7 @@ exports.filterPapers = async (req, res) => {
       filter.paperName = { $in: paperArray };
     }
 
-    // Variant (independent)
+    // Variant
     if (variant) {
       const variantArray = Array.isArray(variant)
         ? variant.map((v) => parseInt(v))
@@ -147,7 +164,7 @@ exports.filterPapers = async (req, res) => {
     }
 
     const papers = await Paper.find(filter)
-      .populate("paperName", "name") // ✅ FIXED
+      .populate("paperName", "name")
       .sort({ year: -1 })
       .lean();
 
@@ -164,6 +181,8 @@ exports.filterPapers = async (req, res) => {
 
 exports.getPaperById = async (req, res) => {
   try {
+    const { features } = await getUserFeatures(req);
+
     const paper = await Paper.findById(req.params.id)
       .populate({
         path: "topic",
@@ -179,13 +198,20 @@ exports.getPaperById = async (req, res) => {
       })
       .populate({
         path: "paperName",
-        select: "name", // ✅ FIXED
+        select: "name",
       })
       .lean();
 
     if (!paper) {
       return res.status(404).json({
         message: "Paper not found",
+      });
+    }
+
+    // 🔐 BLOCK ACCESS
+    if (!features.includes("years_access") && paper.year > 2019) {
+      return res.status(403).json({
+        message: "Upgrade your plan to access this paper",
       });
     }
 
