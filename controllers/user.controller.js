@@ -34,11 +34,14 @@ exports.getMe = async (req, res) => {
         board: user.board || "",
         school: user.school || "",
         studentClass: user.studentClass || "",
-
+      
+        // 🧠 ROLE (🔥 ADD THIS LINE)
+        role: user.role || "user",
+      
         // 📦 PLAN INFO
         planName: user.planName || "Free",
         planExpiry: user.planExpiry || null,
-
+      
         // 🔐 FEATURES
         features
       }

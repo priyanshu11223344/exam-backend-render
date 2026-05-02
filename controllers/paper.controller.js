@@ -1,7 +1,7 @@
 const Topic = require("../models/Topic");
 const Subject = require("../models/Subject");
 const Paper = require("../models/Paper");
-const getUserFeatures = require("../utils/getUserFeatures");
+const getUserContext = require("../utils/getUserContext");
 exports.createPaper = async (req, res) => {
   try {
     const {
@@ -72,12 +72,12 @@ exports.getPapersByTopic = async (req, res) => {
     const skip = (page - 1) * limit;
 
     // ✅ GET USER FEATURES
-    const { features } = await getUserFeatures(req);
+    const { features, isAdmin } = await getUserContext(req);
 
     let filter = { topic: topicId };
 
     // ✅ APPLY YEAR RESTRICTION
-    if (!features.includes("years_access")) {
+    if (!isAdmin && !features.includes("years_access")) {
       filter.year = { $lte: 2019 };
     }
 
@@ -113,7 +113,7 @@ exports.filterPapers = async (req, res) => {
       variant,
     } = req.query;
 
-    const { features } = await getUserFeatures(req);
+    const { features, isAdmin } = await getUserContext(req);
 
     const filter = {};
 
@@ -134,7 +134,7 @@ exports.filterPapers = async (req, res) => {
     }
 
     // ❗ FORCE RESTRICTION
-    if (!features.includes("years_access")) {
+    if (!isAdmin && !features.includes("years_access")) {
       filter.year = { $lte: 2019 };
     }
 
@@ -181,7 +181,7 @@ exports.filterPapers = async (req, res) => {
 
 exports.getPaperById = async (req, res) => {
   try {
-    const { features } = await getUserFeatures(req);
+    const { features, isAdmin } = await getUserContext(req);
 
     const paper = await Paper.findById(req.params.id)
       .populate({
@@ -209,7 +209,7 @@ exports.getPaperById = async (req, res) => {
     }
 
     // 🔐 BLOCK ACCESS
-    if (!features.includes("years_access") && paper.year > 2019) {
+    if (!isAdmin && !features.includes("years_access") && paper.year > 2019){
       return res.status(403).json({
         message: "Upgrade your plan to access this paper",
       });
