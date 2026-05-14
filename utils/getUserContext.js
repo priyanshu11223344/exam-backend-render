@@ -6,7 +6,7 @@ const getOrCreateUser = require("./getOrCreateUser");
 const getUserContext = async (req) => {
   const user = await getOrCreateUser(req);
 
-  // ✅ ADMIN → full access
+  // ✅ ADMIN BYPASS
   if (user.role === "admin") {
     return {
       user,
@@ -15,15 +15,33 @@ const getUserContext = async (req) => {
     };
   }
 
+  // ✅ DEFAULT FREE FEATURES
   let features = ["topical"];
 
-  // 🔥 subscription check
-  if (
+  // ✅ CHECK IF PLAN EXPIRED
+  const isPlanExpired =
+    user.planExpiry &&
+    new Date(user.planExpiry) <= new Date();
+
+  // ✅ AUTO RESET EXPIRED PLAN
+  if (isPlanExpired) {
+    user.planId = null;
+    user.planName = "Free";
+    user.planExpiry = null;
+
+    await user.save();
+  }
+
+  // ✅ CHECK ACTIVE PLAN
+  const isPlanActive =
     user.planId &&
     user.planExpiry &&
-    new Date(user.planExpiry) > new Date()
-  ) {
+    new Date(user.planExpiry) > new Date();
+
+  // ✅ LOAD FEATURES
+  if (isPlanActive) {
     const plan = await Plan.findById(user.planId);
+
     if (plan) {
       features = plan.features;
     }

@@ -4,29 +4,54 @@ const Plan = require("../models/Plan");
 const getOrCreateUser = require("../utils/getOrCreateUser");
 const User = require("../models/User");
 
+
 // ✅ GET CURRENT USER (Dashboard Data)
 exports.getMe = async (req, res) => {
   try {
     const user = await getOrCreateUser(req);
 
-    let features = ["topical"]; // default free feature
+    // ✅ DEFAULT FREE FEATURES
+    let features = ["topical"];
 
-    // ✅ Check active plan
-    if (
+    // ✅ DEFAULT PLAN INFO
+    let activePlanName = "Free";
+    let activePlanExpiry = null;
+
+    // ✅ CHECK IF PLAN EXPIRED
+    const isPlanExpired =
+      user.planExpiry &&
+      new Date(user.planExpiry) <= new Date();
+
+    // ✅ AUTO RESET EXPIRED PLAN
+    if (isPlanExpired) {
+      user.planId = null;
+      user.planName = "Free";
+      user.planExpiry = null;
+
+      await user.save();
+    }
+
+    // ✅ CHECK ACTIVE PLAN
+    const isPlanActive =
       user.planId &&
       user.planExpiry &&
-      new Date(user.planExpiry) > new Date()
-    ) {
+      new Date(user.planExpiry) > new Date();
+
+    // ✅ LOAD ACTIVE PLAN FEATURES
+    if (isPlanActive) {
       const plan = await Plan.findById(user.planId);
 
       if (plan) {
         features = plan.features;
+        activePlanName = plan.name;
+        activePlanExpiry = user.planExpiry;
       }
     }
 
     res.status(200).json({
       success: true,
       data: {
+
         // 👤 USER INFO
         name: user.name || "",
         email: user.email || "",
@@ -34,35 +59,43 @@ exports.getMe = async (req, res) => {
         board: user.board || "",
         school: user.school || "",
         studentClass: user.studentClass || "",
-      
-        // 🧠 ROLE (🔥 ADD THIS LINE)
+
+        // 🧠 ROLE
         role: user.role || "user",
-      
-        // 📦 PLAN INFO
-        planName: user.planName || "Free",
-        planExpiry: user.planExpiry || null,
-      
+
+        // 📦 ACTIVE PLAN INFO
+        planName: activePlanName,
+        planExpiry: activePlanExpiry,
+
         // 🔐 FEATURES
-        features
-      }
+        features,
+      },
     });
 
   } catch (err) {
     console.log("GET ME ERROR:", err);
+
     res.status(500).json({
       success: false,
-      error: err.message
+      error: err.message,
     });
   }
 };
+
 
 // ✅ UPDATE USER PROFILE (SECURE)
 exports.updateMe = async (req, res) => {
   try {
     const user = await getOrCreateUser(req);
 
-    // ✅ Only allow safe fields
-    const allowedFields = ["name", "age", "board", "school", "studentClass"];
+    // ✅ ALLOWED FIELDS ONLY
+    const allowedFields = [
+      "name",
+      "age",
+      "board",
+      "school",
+      "studentClass",
+    ];
 
     const updates = {};
 
@@ -77,20 +110,21 @@ exports.updateMe = async (req, res) => {
       { $set: updates },
       {
         new: true,
-        runValidators: true
+        runValidators: true,
       }
     );
 
     res.status(200).json({
       success: true,
-      data: updatedUser
+      data: updatedUser,
     });
 
   } catch (err) {
     console.log("UPDATE ME ERROR:", err);
+
     res.status(500).json({
       success: false,
-      error: err.message
+      error: err.message,
     });
   }
 };
