@@ -1,316 +1,124 @@
 const XLSX = require("xlsx");
 const mongoose = require("mongoose");
 
-const Board = require("../models/Board");
-const Subject = require("../models/Subject");
-const Topic = require("../models/Topic");
-const Paper = require("../models/Paper");
-const PaperName = require("../models/PaperName"); // 🔥 added
+const {
+  processPaperRow,
+} = require("../services/paperUploadService");
 
-/* ===============================
-   HELPERS
-================================= */
-
-const cleanUrl = (url) => {
-  if (!url) return "";
-  return url.toString().replace(/^"|"$/g, "").trim();
-};
-
-const detectFileType = (url) => {
-  if (!url) return "link";
-
-  const lower = url.toLowerCase();
-
-  if (lower.endsWith(".pdf")) return "pdf";
-
-  if (
-    lower.includes(".png") ||
-    lower.includes(".jpg") ||
-    lower.includes(".jpeg") ||
-    lower.includes(".webp")
-  ) {
-    return "image";
-  }
-
-  return "link";
-};
-
-const normalizeLinks = (field) => {
-  if (!field) return [];
-  return field
-    .toString()
-    .split("|")
-    .map((l) => cleanUrl(l))
-    .filter(Boolean);
-};
-
-const isSameArray = (arr1, arr2) => {
-  if (arr1.length !== arr2.length) return false;
-  return arr1.every((v, i) => v === arr2[i]);
-};
-
-// ✅ MERGE USING originalUrl
-const mergeFiles = (oldFiles, newLinks) => {
-  return newLinks.map((link) => {
-    const existing = oldFiles.find(
-      (f) => f.originalUrl === link
-    );
-
-    if (existing) return existing;
-
-    return {
-      fileType: detectFileType(link),
-      originalUrl: link,
-      cloudinaryUrl: null,
-      status: "pending",
-    };
-  });
-};
-
-/* ===============================
-   MAIN CONTROLLER
-================================= */
+/* =====================================
+   EXCEL UPLOAD
+===================================== */
 
 exports.uploadExcel = async (req, res) => {
   const session = await mongoose.startSession();
+
   session.startTransaction();
 
   try {
     const workbook = XLSX.readFile(req.file.path);
-    const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(sheet);
+
+    const sheet =
+      workbook.Sheets[workbook.SheetNames[0]];
+
+    const rows =
+      XLSX.utils.sheet_to_json(sheet);
 
     let inserted = 0;
     let updated = 0;
     let skipped = 0;
 
     for (const row of rows) {
-      const {
-        board,
-        subject,
-        topic,
-        year,
-        season,
-        paperName,
-        variant,
-        questionNumber,
-        questionPaper,
-        markScheme,
-        correctAnswer,
-        explanation,
-        specialComment,
-      } = row;
-    
-      // ✅ Detect MCQ (better + case safe)
-      const normalizedPaperName = paperName?.toString().trim().toLowerCase();
-      const mcqPapers = ["1", "2", "1(core)", "2(extended)"];
-      const isMCQ = mcqPapers.includes(normalizedPaperName);
-    
-      const finalCorrectAnswer =
-        isMCQ && correctAnswer
-          ? correctAnswer.toString().trim().toUpperCase()
-          : null;
-    
-      const validAnswers = ["A", "B", "C", "D"];
-    
-      if (isMCQ && finalCorrectAnswer && !validAnswers.includes(finalCorrectAnswer)) {
-        console.log(`Invalid answer at question ${questionNumber}`);
-        skipped++;
-        continue;
-      }
-    
-      // ✅ FIXED CONDITION (topic removed)
-      if (!board || !subject || !questionNumber || !paperName) {
-        skipped++;
-        continue;
-      }
-    
-      /* ===== BOARD ===== */
-      let boardDoc = await Board.findOne({ name: board }).session(session);
-      if (!boardDoc) {
-        boardDoc = (await Board.create([{ name: board }], { session }))[0];
-      }
-    
-      /* ===== SUBJECT ===== */
-      let subjectDoc = await Subject.findOne({
-        name: subject,
-        board: boardDoc._id,
-      }).session(session);
-    
-      if (!subjectDoc) {
-        subjectDoc = (
-          await Subject.create(
-            [{ name: subject, board: boardDoc._id }],
-            { session }
-          )
-        )[0];
-      }
-    
-      /* ===== TOPIC (OPTIONAL NOW) ===== */
-      let topicDoc = null;
-    
-      if (topic && topic.toString().trim() !== "") {
-        topicDoc = await Topic.findOne({
-          name: topic,
-          subject: subjectDoc._id,
-        }).session(session);
-    
-        if (!topicDoc) {
-          topicDoc = (
-            await Topic.create(
-              [{ name: topic, subject: subjectDoc._id }],
-              { session }
-            )
-          )[0];
-        }
-      }
-    
-      /* ===== PAPER NAME ===== */
-      let paperNameDoc = await PaperName.findOne({
-        subjectId: subjectDoc._id,
-        name: paperName,
-      }).session(session);
-    
-      if (!paperNameDoc) {
-        paperNameDoc = (
-          await PaperName.create(
-            [{ subjectId: subjectDoc._id, name: paperName }],
-            { session }
-          )
-        )[0];
-      }
-    
-      const qpLinks = normalizeLinks(questionPaper);
-      const msLinks = normalizeLinks(markScheme);
-    
-      /* ===== FIND EXISTING ===== */
-      const existing = await Paper.findOne({
-        topic: topicDoc ? topicDoc._id : undefined, // ✅ FIXED
-        year,
-        season,
-        paperName: paperNameDoc._id,
-        variant,
-        questionNumber,
-      }).session(session);
-    
-      if (existing) {
-        const existingQP = (existing.questionPaper || []).map(
-          (f) => f.originalUrl
-        );
-    
-        const existingMS = (existing.markScheme || []).map(
-          (f) => f.originalUrl
-        );
-    
-        const sameQP = isSameArray(existingQP, qpLinks);
-        const sameMS = isSameArray(existingMS, msLinks);
-    
-        const sameExplanation =
-          cleanUrl(existing.explanation?.originalUrl) === cleanUrl(explanation);
-    
-        const sameComment =
-          cleanUrl(existing.specialComment?.originalUrl) === cleanUrl(specialComment);
-    
-        existing.isMCQ = isMCQ;
-        existing.correctAnswer = finalCorrectAnswer;
-    
-        if (sameQP && sameMS && sameExplanation && sameComment) {
-          skipped++;
-          continue;
-        }
-    
-        if (!sameQP) {
-          existing.questionPaper = mergeFiles(
-            existing.questionPaper || [],
-            qpLinks
-          );
-        }
-    
-        if (!sameMS) {
-          existing.markScheme = mergeFiles(
-            existing.markScheme || [],
-            msLinks
-          );
-        }
-    
-        if (!sameExplanation) {
-          existing.explanation = explanation
-            ? {
-                fileType: detectFileType(explanation),
-                originalUrl: cleanUrl(explanation),
-                cloudinaryUrl: null,
-                status: "pending",
-              }
-            : undefined;
-        }
-    
-        if (!sameComment) {
-          existing.specialComment = specialComment
-            ? {
-                fileType: detectFileType(specialComment),
-                originalUrl: cleanUrl(specialComment),
-                cloudinaryUrl: null,
-                status: "pending",
-              }
-            : undefined;
-        }
-    
-        if (!existing.isModified()) {
-          skipped++;
-          continue;
-        }
-    
-        await existing.save({ session });
-        updated++;
-      } else {
-        await Paper.create(
-          [
-            {
-              topic: topicDoc ? topicDoc._id : undefined, // ✅ FIXED
-              topicName: topicDoc ? topicDoc.name : undefined, // ✅ FIXED
-              year,
-              season,
-              paperName: paperNameDoc._id,
-              variant,
-              questionNumber,
-              isMCQ,
-              correctAnswer: finalCorrectAnswer,
-              questionPaper: mergeFiles([], qpLinks),
-              markScheme: mergeFiles([], msLinks),
-    
-              explanation: explanation
-                ? {
-                    fileType: detectFileType(explanation),
-                    originalUrl: cleanUrl(explanation),
-                    cloudinaryUrl: null,
-                    status: "pending",
-                  }
-                : undefined,
-    
-              specialComment: specialComment
-                ? {
-                    fileType: detectFileType(specialComment),
-                    originalUrl: cleanUrl(specialComment),
-                    cloudinaryUrl: null,
-                    status: "pending",
-                  }
-                : undefined,
-            },
-          ],
-          { session }
-        );
-    
-        inserted++;
-      }
+      const result =
+        await processPaperRow(row, session);
+
+      if (result === "inserted") inserted++;
+
+      else if (result === "updated") updated++;
+
+      else skipped++;
     }
+
     await session.commitTransaction();
+
     session.endSession();
 
-    res.json({ inserted, updated, skipped });
+    res.json({
+      inserted,
+      updated,
+      skipped,
+    });
   } catch (err) {
     await session.abortTransaction();
+
     session.endSession();
-    console.log("error is",err.message)
-    res.status(500).json({ error: err.message });
+
+    console.log("error is", err.message);
+
+    res.status(500).json({
+      error: err.message,
+    });
+  }
+};
+
+/* =====================================
+   FORM UPLOAD
+===================================== */
+
+exports.uploadQuestionsByForm = async (
+  req,
+  res
+) => {
+  const session = await mongoose.startSession();
+
+  session.startTransaction();
+
+  try {
+    const rows = req.body.questions;
+
+    if (
+      !rows ||
+      !Array.isArray(rows) ||
+      rows.length === 0
+    ) {
+      return res.status(400).json({
+        error: "Questions array is required",
+      });
+    }
+
+    let inserted = 0;
+    let updated = 0;
+    let skipped = 0;
+
+    for (const row of rows) {
+      const result =
+        await processPaperRow(row, session);
+
+      if (result === "inserted") inserted++;
+
+      else if (result === "updated") updated++;
+
+      else skipped++;
+    }
+
+    await session.commitTransaction();
+
+    session.endSession();
+
+    res.json({
+      success: true,
+      inserted,
+      updated,
+      skipped,
+    });
+  } catch (err) {
+    await session.abortTransaction();
+
+    session.endSession();
+
+    console.log("error is", err.message);
+
+    res.status(500).json({
+      error: err.message,
+    });
   }
 };

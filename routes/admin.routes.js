@@ -6,8 +6,11 @@ const multer = require("multer");
 
 const upload = multer({ dest: "uploads/" });
 
-const { uploadExcel } = require("../controllers/admin.controller");
+const { uploadExcel,uploadQuestionsByForm } = require("../controllers/admin.controller");
 
 router.post("/upload-excel", upload.single("file"), uploadExcel);
-
+router.post(
+    "/upload-questions-form",
+    uploadQuestionsByForm
+  );
 module.exports = router;

@@ -1,0 +1,345 @@
+const Board = require("../models/Board");
+const Subject = require("../models/Subject");
+const Topic = require("../models/Topic");
+const Paper = require("../models/Paper");
+const PaperName = require("../models/PaperName");
+
+/* ===============================
+   HELPERS
+================================= */
+
+const cleanUrl = (url) => {
+  if (!url) return "";
+  return url.toString().replace(/^"|"$/g, "").trim();
+};
+
+const detectFileType = (url) => {
+  if (!url) return "link";
+
+  const lower = url.toLowerCase();
+
+  if (lower.endsWith(".pdf")) return "pdf";
+
+  if (
+    lower.includes(".png") ||
+    lower.includes(".jpg") ||
+    lower.includes(".jpeg") ||
+    lower.includes(".webp")
+  ) {
+    return "image";
+  }
+
+  return "link";
+};
+
+const normalizeLinks = (field) => {
+  if (!field) return [];
+
+  // ✅ Handles array from form upload
+  if (Array.isArray(field)) {
+    return field.map((l) => cleanUrl(l)).filter(Boolean);
+  }
+
+  // ✅ Handles excel upload string
+  return field
+    .toString()
+    .split("|")
+    .map((l) => cleanUrl(l))
+    .filter(Boolean);
+};
+
+const isSameArray = (arr1, arr2) => {
+  if (arr1.length !== arr2.length) return false;
+  return arr1.every((v, i) => v === arr2[i]);
+};
+
+const mergeFiles = (oldFiles, newLinks) => {
+  return newLinks.map((link) => {
+    const existing = oldFiles.find(
+      (f) => f.originalUrl === link
+    );
+
+    if (existing) return existing;
+
+    return {
+      fileType: detectFileType(link),
+      originalUrl: link,
+      cloudinaryUrl: null,
+      status: "pending",
+    };
+  });
+};
+
+/* ===============================
+   MAIN SERVICE
+================================= */
+
+const processPaperRow = async (row, session) => {
+  const {
+    board,
+    subject,
+    topic,
+    year,
+    season,
+    paperName,
+    variant,
+    questionNumber,
+    questionPaper,
+    markScheme,
+    correctAnswer,
+    explanation,
+    specialComment,
+  } = row;
+
+  // ✅ Detect MCQ
+  const normalizedPaperName = paperName?.toString().trim().toLowerCase();
+
+  const mcqPapers = ["1", "2", "1(core)", "2(extended)"];
+
+  const isMCQ = mcqPapers.includes(normalizedPaperName);
+
+  const finalCorrectAnswer =
+    isMCQ && correctAnswer
+      ? correctAnswer.toString().trim().toUpperCase()
+      : null;
+
+  const validAnswers = ["A", "B", "C", "D"];
+
+  if (
+    isMCQ &&
+    finalCorrectAnswer &&
+    !validAnswers.includes(finalCorrectAnswer)
+  ) {
+    return "skipped";
+  }
+
+  // ✅ Required fields
+  if (!board || !subject || !questionNumber || !paperName) {
+    return "skipped";
+  }
+
+  /* ===== BOARD ===== */
+
+  let boardDoc = await Board.findOne({
+    name: board,
+  }).session(session);
+
+  if (!boardDoc) {
+    boardDoc = (
+      await Board.create([{ name: board }], { session })
+    )[0];
+  }
+
+  /* ===== SUBJECT ===== */
+
+  let subjectDoc = await Subject.findOne({
+    name: subject,
+    board: boardDoc._id,
+  }).session(session);
+
+  if (!subjectDoc) {
+    subjectDoc = (
+      await Subject.create(
+        [
+          {
+            name: subject,
+            board: boardDoc._id,
+          },
+        ],
+        { session }
+      )
+    )[0];
+  }
+
+  /* ===== TOPIC ===== */
+
+  let topicDoc = null;
+
+  if (topic && topic.toString().trim() !== "") {
+    topicDoc = await Topic.findOne({
+      name: topic,
+      subject: subjectDoc._id,
+    }).session(session);
+
+    if (!topicDoc) {
+      topicDoc = (
+        await Topic.create(
+          [
+            {
+              name: topic,
+              subject: subjectDoc._id,
+            },
+          ],
+          { session }
+        )
+      )[0];
+    }
+  }
+
+  /* ===== PAPER NAME ===== */
+
+  let paperNameDoc = await PaperName.findOne({
+    subjectId: subjectDoc._id,
+    name: paperName,
+  }).session(session);
+
+  if (!paperNameDoc) {
+    paperNameDoc = (
+      await PaperName.create(
+        [
+          {
+            subjectId: subjectDoc._id,
+            name: paperName,
+          },
+        ],
+        { session }
+      )
+    )[0];
+  }
+
+  const qpLinks = normalizeLinks(questionPaper);
+  const msLinks = normalizeLinks(markScheme);
+
+  /* ===== FIND EXISTING ===== */
+
+  const existing = await Paper.findOne({
+    topic: topicDoc ? topicDoc._id : undefined,
+    year,
+    season,
+    paperName: paperNameDoc._id,
+    variant,
+    questionNumber,
+  }).session(session);
+
+  /* ===============================
+     UPDATE
+  ================================= */
+
+  if (existing) {
+    const existingQP = (existing.questionPaper || []).map(
+      (f) => f.originalUrl
+    );
+
+    const existingMS = (existing.markScheme || []).map(
+      (f) => f.originalUrl
+    );
+
+    const sameQP = isSameArray(existingQP, qpLinks);
+
+    const sameMS = isSameArray(existingMS, msLinks);
+
+    const sameExplanation =
+      cleanUrl(existing.explanation?.originalUrl) ===
+      cleanUrl(explanation);
+
+    const sameComment =
+      cleanUrl(existing.specialComment?.originalUrl) ===
+      cleanUrl(specialComment);
+
+    existing.isMCQ = isMCQ;
+    existing.correctAnswer = finalCorrectAnswer;
+
+    if (sameQP && sameMS && sameExplanation && sameComment) {
+      return "skipped";
+    }
+
+    if (!sameQP) {
+      existing.questionPaper = mergeFiles(
+        existing.questionPaper || [],
+        qpLinks
+      );
+    }
+
+    if (!sameMS) {
+      existing.markScheme = mergeFiles(
+        existing.markScheme || [],
+        msLinks
+      );
+    }
+
+    if (!sameExplanation) {
+      existing.explanation = explanation
+        ? {
+            fileType: detectFileType(explanation),
+            originalUrl: cleanUrl(explanation),
+            cloudinaryUrl: null,
+            status: "pending",
+          }
+        : undefined;
+    }
+
+    if (!sameComment) {
+      existing.specialComment = specialComment
+        ? {
+            fileType: detectFileType(specialComment),
+            originalUrl: cleanUrl(specialComment),
+            cloudinaryUrl: null,
+            status: "pending",
+          }
+        : undefined;
+    }
+
+    if (!existing.isModified()) {
+      return "skipped";
+    }
+
+    await existing.save({ session });
+
+    return "updated";
+  }
+
+  /* ===============================
+     INSERT
+  ================================= */
+
+  await Paper.create(
+    [
+      {
+        topic: topicDoc ? topicDoc._id : undefined,
+
+        topicName: topicDoc
+          ? topicDoc.name
+          : undefined,
+
+        year,
+        season,
+        paperName: paperNameDoc._id,
+        variant,
+        questionNumber,
+
+        isMCQ,
+
+        correctAnswer: finalCorrectAnswer,
+
+        questionPaper: mergeFiles([], qpLinks),
+
+        markScheme: mergeFiles([], msLinks),
+
+        explanation: explanation
+          ? {
+              fileType: detectFileType(explanation),
+              originalUrl: cleanUrl(explanation),
+              cloudinaryUrl: null,
+              status: "pending",
+            }
+          : undefined,
+
+        specialComment: specialComment
+          ? {
+              fileType: detectFileType(specialComment),
+              originalUrl: cleanUrl(specialComment),
+              cloudinaryUrl: null,
+              status: "pending",
+            }
+          : undefined,
+      },
+    ],
+    { session }
+  );
+
+  return "inserted";
+};
+
+module.exports = {
+  processPaperRow,
+};

@@ -13,33 +13,44 @@ exports.getQuizQuestions = async (req, res) => {
       paperName,
       variant,
     } = req.query;
+
     /* ===============================
-STEP 1: VALIDATION
-================================= */
-    if (!board ||
+       STEP 1: VALIDATION
+    ================================= */
+
+    if (
+      !board ||
       !subject ||
       !year ||
       !season ||
       !paperName ||
-      !variant) {
+      !variant
+    ) {
       return res.status(400).json({
         success: false,
         message: "All fields are required",
       });
     }
+
     /* ===============================
-STEP 2: FIND BOARD
-================================= */
-    const boardDoc = await Board.findOne({ name: board });
+       STEP 2: FIND BOARD
+    ================================= */
+
+    const boardDoc = await Board.findOne({
+      name: board,
+    });
+
     if (!boardDoc) {
       return res.status(404).json({
         success: false,
         message: "Board not found",
-      })
+      });
     }
+
     /* ===============================
        STEP 3: FIND SUBJECT
     ================================= */
+
     const subjectDoc = await Subject.findOne({
       name: subject,
       board: boardDoc._id,
@@ -53,14 +64,45 @@ STEP 2: FIND BOARD
     }
 
     /* ===============================
-       STEP 4: FIND PAPER NAME
+       STEP 4: NORMALIZE INPUTS
     ================================= */
-    const paperNameDoc = await PaperName.findOne({
+
+    // YEARS
+    const yearArray =
+      typeof year === "string"
+        ? year.split(",").map(Number)
+        : year;
+
+    // SEASONS
+    const seasonArray =
+      typeof season === "string"
+        ? season.split(",").map((s) => s.trim())
+        : season;
+
+    // PAPER NAMES
+    const paperNameArray =
+      typeof paperName === "string"
+        ? paperName.split(",").map((p) => p.trim())
+        : paperName;
+
+    // VARIANTS
+    const variantArray =
+      typeof variant === "string"
+        ? variant.split(",").map(Number)
+        : variant;
+
+    /* ===============================
+       STEP 5: FIND PAPER NAMES
+    ================================= */
+
+    const paperNameDocs = await PaperName.find({
       subjectId: subjectDoc._id,
-      name: paperName,
+      name: {
+        $in: paperNameArray,
+      },
     });
 
-    if (!paperNameDoc) {
+    if (!paperNameDocs.length) {
       return res.status(404).json({
         success: false,
         message: "Paper not found",
@@ -68,37 +110,46 @@ STEP 2: FIND BOARD
     }
 
     /* ===============================
-       STEP 5: FETCH MCQ QUESTIONS
+       STEP 6: BUILD QUERY
     ================================= */
+
     const query = {
-      paperName: paperNameDoc._id,
-      variant,
+      paperName: {
+        $in: paperNameDocs.map(
+          (p) => p._id
+        ),
+      },
+
+      variant: {
+        $in: variantArray,
+      },
+
+      year: {
+        $in: yearArray,
+      },
+
+      season: {
+        $in: seasonArray,
+      },
+
       isMCQ: true,
     };
-    
-    // ✅ Normalize inputs
-    const yearArray =
-      typeof year === "string"
-        ? year.split(",").map(Number)
-        : year;
-    
-    const seasonArray =
-      typeof season === "string"
-        ? season.split(",")
-        : season;
-    
-    // ✅ Always use $in
-    query.year = { $in: yearArray };
-    query.season = { $in: seasonArray };
-    
-    // 🔥 Final query
+
+    /* ===============================
+       STEP 7: FETCH QUESTIONS
+    ================================= */
+
     const questions = await Paper.find(query)
       .populate("paperName", "name")
-      .sort({ questionNumber: 1 });
+      .sort({
+        year: -1,
+        questionNumber: 1,
+      });
 
     /* ===============================
        RESPONSE
     ================================= */
+
     res.json({
       success: true,
       count: questions.length,
@@ -106,12 +157,12 @@ STEP 2: FIND BOARD
     });
 
   } catch (error) {
+
+    console.log("QUIZ ERROR:", error);
+
     res.status(500).json({
       success: false,
       message: error.message,
     });
   }
 };
-
-
-
