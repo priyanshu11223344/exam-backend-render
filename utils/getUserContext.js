@@ -10,7 +10,7 @@ const getUserContext = async (req) => {
   if (user.role === "admin") {
     return {
       user,
-      features: [],
+      features: ["topical", "mcq", "pdf", "years_access"],
       isAdmin: true,
     };
   }

@@ -11,6 +11,11 @@ const userSchema = new mongoose.Schema({
     required: true,
     unique: true
   },
+  role: {
+    type: String,
+    enum: ["admin", "teacher", "user"],
+    default: "user"
+  },
   age:Number,
   board:String,
   school:String,

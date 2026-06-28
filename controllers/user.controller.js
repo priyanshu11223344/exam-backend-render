@@ -9,16 +9,21 @@ const User = require("../models/User");
 exports.getMe = async (req, res) => {
   try {
     const user = await getOrCreateUser(req);
+    const isAdmin = user.role === "admin";
+    const isTeacher = user.role === "teacher";
 
     // ✅ DEFAULT FREE FEATURES
-    let features = ["topical"];
+    let features = isAdmin
+      ? ["topical", "mcq", "pdf", "years_access"]
+      : ["topical"];
 
     // ✅ DEFAULT PLAN INFO
-    let activePlanName = "Free";
+    let activePlanName = isAdmin ? "Admin" : "Free";
     let activePlanExpiry = null;
 
     // ✅ CHECK IF PLAN EXPIRED
     const isPlanExpired =
+      !isAdmin &&
       user.planExpiry &&
       new Date(user.planExpiry) <= new Date();
 
@@ -33,6 +38,7 @@ exports.getMe = async (req, res) => {
 
     // ✅ CHECK ACTIVE PLAN
     const isPlanActive =
+      !isAdmin &&
       user.planId &&
       user.planExpiry &&
       new Date(user.planExpiry) > new Date();
@@ -64,7 +70,7 @@ exports.getMe = async (req, res) => {
         role: user.role || "user",
 
         // 📦 ACTIVE PLAN INFO
-        planName: activePlanName,
+        planName: isTeacher ? "Teacher" : activePlanName,
         planExpiry: activePlanExpiry,
 
         // 🔐 FEATURES

@@ -8,8 +8,11 @@ const {
   verifyPayment
 } = require("../controllers/payment.controller");
 const { requireAuth } = require("@clerk/express");
-// ⚠️ Add auth middleware later
-router.post("/create-order",requireAuth(), createOrder);
-router.post("/verify-payment",requireAuth(), verifyPayment);
+const authMiddleware = process.env.CLERK_SECRET_KEY
+  ? requireAuth()
+  : (req, res, next) => next();
+
+router.post("/create-order", authMiddleware, createOrder);
+router.post("/verify-payment", authMiddleware, verifyPayment);
 
 module.exports = router;

@@ -2,8 +2,52 @@
 
 const razorpay = require("../config/razorpay");
 const Plan = require("../models/Plan");
+const User = require("../models/User");
 const crypto = require("crypto");
 const getOrCreateUser = require("../utils/getOrCreateUser");
+
+const isLocalPaymentRequest = (req) => {
+  const origin = req.get("origin") || "";
+  const clientOrigin = process.env.CLIENT_ORIGIN || "";
+
+  return [origin, clientOrigin].some((value) =>
+    value.includes("localhost") || value.includes("127.0.0.1")
+  );
+};
+
+const activatePlanForLocalUser = async ({ req, plan, selectedDuration }) => {
+  const userInfo = req.body.user || {};
+  const auth = typeof req.auth === "function" ? req.auth() : {};
+  const clerkId = auth?.userId || userInfo.clerkId;
+  const email = userInfo.email;
+
+  if (!clerkId && !email) {
+    return null;
+  }
+
+  const expiry = new Date(
+    Date.now() + selectedDuration.durationDays * 24 * 60 * 60 * 1000
+  );
+
+  return User.findOneAndUpdate(
+    clerkId ? { clerkId } : { email },
+    {
+      $set: {
+        clerkId: clerkId || email,
+        email: email || "",
+        name: userInfo.name || "Local Admin",
+        planId: plan._id,
+        planName: plan.name,
+        planExpiry: expiry,
+      },
+    },
+    {
+      new: true,
+      upsert: true,
+      setDefaultsOnInsert: true,
+    }
+  );
+};
 
 
 // ✅ CREATE ORDER
@@ -32,6 +76,31 @@ exports.createOrder = async (req, res) => {
     }
 
     const amount = selectedDuration.price * 100; // Razorpay uses paise
+
+    if (!razorpay) {
+      if (!isLocalPaymentRequest(req)) {
+        return res.status(503).json({
+          success: false,
+          error: "Payment gateway is not configured. Add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET before enabling hosted upgrades.",
+        });
+      }
+
+      const user = await activatePlanForLocalUser({
+        req,
+        plan,
+        selectedDuration,
+      });
+
+      return res.json({
+        success: true,
+        localPaymentBypass: true,
+        message: user
+          ? "Local payment bypass enabled. Plan activated for this local test user."
+          : "Local payment bypass enabled. No user record was updated because user details were unavailable.",
+        planName: plan.name,
+        planExpiry: user?.planExpiry || null,
+      });
+    }
 
     // 🔥 Create Razorpay order here
     const order = await razorpay.orders.create({
@@ -64,6 +133,12 @@ exports.verifyPayment = async (req, res) => {
     } = req.body;
 
     // 🔐 Verify signature
+    if (!razorpay || !process.env.RAZORPAY_KEY_SECRET) {
+      return res.status(503).json({
+        error: "Payment verification requires Razorpay keys.",
+      });
+    }
+
     const body = razorpay_order_id + "|" + razorpay_payment_id;
 
     const expected = crypto
