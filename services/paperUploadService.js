@@ -40,10 +40,10 @@ const normalizeLinks = (field) => {
     return field.map((l) => cleanUrl(l)).filter(Boolean);
   }
 
-  // ✅ Handles excel upload string
+  // Handles Excel pipes and form textareas where admins paste one link per line.
   return field
     .toString()
-    .split("|")
+    .split(/\||\r?\n/)
     .map((l) => cleanUrl(l))
     .filter(Boolean);
 };
