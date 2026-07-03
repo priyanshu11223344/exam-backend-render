@@ -1,6 +1,8 @@
 const User = require("../models/User");
 const TeacherAssignment = require("../models/TeacherAssignment");
 const ClassSession = require("../models/ClassSession");
+const mongoose = require("mongoose");
+const { processPaperRow } = require("../services/paperUploadService");
 
 const normalizeClasses = (classes) => {
   if (typeof classes === "string") {
@@ -186,6 +188,62 @@ exports.getTeacherContext = async (req, res) => {
       },
     });
   } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+exports.uploadTeacherQuestions = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const teacherEmail = String(req.body.teacherEmail || req.get("x-local-user-email") || "").toLowerCase();
+    const rows = req.body.questions;
+
+    if (!teacherEmail) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ success: false, error: "Teacher email is required." });
+    }
+
+    if (!Array.isArray(rows) || rows.length === 0) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ success: false, error: "Questions array is required." });
+    }
+
+    const assignment = await getAssignmentForEmail(teacherEmail);
+
+    if (!assignment) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(403).json({ success: false, error: "This teacher has no active class assignment." });
+    }
+
+    let inserted = 0;
+    let updated = 0;
+    let skipped = 0;
+
+    for (const row of rows) {
+      const questionRow = {
+        ...row,
+        board: assignment.board,
+      };
+
+      const result = await processPaperRow(questionRow, session);
+
+      if (result === "inserted") inserted++;
+      else if (result === "updated") updated++;
+      else skipped++;
+    }
+
+    await session.commitTransaction();
+    session.endSession();
+
+    res.json({ success: true, inserted, updated, skipped });
+  } catch (err) {
+    await session.abortTransaction();
+    session.endSession();
     res.status(500).json({ success: false, error: err.message });
   }
 };
