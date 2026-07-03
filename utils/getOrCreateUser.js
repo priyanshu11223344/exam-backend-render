@@ -56,34 +56,69 @@ const getOrCreateUser = async (req) => {
     throw new Error("Unauthorized");
   }
 
+  const isKnownRole = (value) => ["admin", "teacher", "user"].includes(value);
+
   // ✅ FAST: get role from token first (no API call)
   let role = auth.sessionClaims?.public_metadata?.role;
+  if (!isKnownRole(role)) role = undefined;
 
   let clerkUser;
 
-  // 🔥 fallback only if role not present
-  if (!role) {
-    clerkUser = await clerkClient.users.getUser(clerkId);
-    role = clerkUser.publicMetadata?.role || "user";
-  }
-
-  let user = await User.findOne({ clerkId });
-
-  if (!user) {
-    // ensure we have clerkUser if needed
+  const getClerkUser = async () => {
     if (!clerkUser) {
       clerkUser = await clerkClient.users.getUser(clerkId);
     }
+    return clerkUser;
+  };
 
-    user = await User.create({
-      clerkId,
-      email: clerkUser.emailAddresses[0]?.emailAddress || "",
-      name: auth.sessionClaims?.name || "User",
-      role: role || "user",
-    });
+  // Fetch Clerk user when role is missing or we need email matching for preassigned teachers.
+  if (!role) {
+    const fetchedUser = await getClerkUser();
+    role = fetchedUser.publicMetadata?.role;
+    if (!isKnownRole(role)) role = undefined;
   }
 
-  user.role = role || user.role || "user";
+  const fetchedUser = await getClerkUser();
+  const email = fetchedUser.emailAddresses[0]?.emailAddress?.toLowerCase() || "";
+
+  let user = await User.findOne({
+    $or: [
+      { clerkId },
+      ...(email ? [{ email }] : []),
+    ],
+  });
+
+  if (!user) {
+    user = await User.create({
+      clerkId,
+      email,
+      name: auth.sessionClaims?.name || fetchedUser.fullName || "User",
+      role: role || "user",
+    });
+  } else {
+    const hasManualTeacherId =
+      typeof user.clerkId === "string" && user.clerkId.startsWith("manual-teacher:");
+
+    if (!user.clerkId || hasManualTeacherId) {
+      user.clerkId = clerkId;
+    }
+
+    if (!user.email && email) {
+      user.email = email;
+    }
+
+    if (!user.name || user.name === "Teacher" || user.name === "User") {
+      user.name = auth.sessionClaims?.name || fetchedUser.fullName || user.name;
+    }
+
+    if (role && role !== "user") {
+      user.role = role;
+    } else {
+      user.role = user.role || "user";
+    }
+
+    await user.save();
+  }
 
   return user;
 };
