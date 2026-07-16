@@ -9,6 +9,7 @@ const upload = multer({ dest: "uploads/" });
 const {
   getDashboardSummary,
   getUsers,
+  updateUserByAdmin,
   uploadExcel,
   uploadQuestionsByForm,
 } = require("../controllers/admin.controller");
@@ -21,6 +22,7 @@ const {
 
 router.get("/dashboard-summary", getDashboardSummary);
 router.get("/users", getUsers);
+router.put("/users/:userId", updateUserByAdmin);
 router.get("/teachers", getAdminTeachers);
 router.post("/teachers/assign", assignTeacher);
 router.get("/teacher-remarks", getAdminRemarks);

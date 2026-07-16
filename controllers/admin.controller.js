@@ -286,3 +286,57 @@ exports.getUsers = async (req, res) => {
     });
   }
 };
+
+exports.updateUserByAdmin = async (req, res) => {
+  try {
+    const allowedFields = [
+      "name",
+      "age",
+      "board",
+      "school",
+      "studentClass",
+      "planName",
+      "planExpiry",
+    ];
+    const updates = {};
+
+    allowedFields.forEach((field) => {
+      if (req.body[field] !== undefined) {
+        updates[field] = req.body[field];
+      }
+    });
+
+    if (updates.planExpiry === "") {
+      updates.planExpiry = null;
+    }
+
+    if (updates.age === "") {
+      updates.age = null;
+    }
+
+    const user = await User.findByIdAndUpdate(
+      req.params.userId,
+      { $set: updates },
+      { new: true, runValidators: true }
+    )
+      .select("name email role age board school studentClass planName planExpiry createdAt updatedAt")
+      .lean();
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: "User not found.",
+      });
+    }
+
+    res.json({
+      success: true,
+      data: user,
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      error: err.message,
+    });
+  }
+};
