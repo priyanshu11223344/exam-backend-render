@@ -314,6 +314,34 @@ exports.updateUserByAdmin = async (req, res) => {
       updates.age = null;
     }
 
+    if (updates.planName === "Free") {
+      updates.planId = null;
+      updates.planExpiry = null;
+    } else if (updates.planName) {
+      const selectedPlan = await Plan.findOne({
+        name: { $regex: `^${updates.planName}$`, $options: "i" },
+        isActive: true,
+      });
+
+      if (!selectedPlan) {
+        return res.status(400).json({
+          success: false,
+          error: "Selected plan is not available.",
+        });
+      }
+
+      updates.planId = selectedPlan._id;
+      updates.planName = selectedPlan.name;
+
+      if (!updates.planExpiry) {
+        const longestDuration = [...(selectedPlan.durations || [])].sort(
+          (a, b) => (b.durationDays || 0) - (a.durationDays || 0)
+        )[0];
+        const durationDays = longestDuration?.durationDays || 365;
+        updates.planExpiry = new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000);
+      }
+    }
+
     const user = await User.findByIdAndUpdate(
       req.params.userId,
       { $set: updates },
