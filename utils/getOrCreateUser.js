@@ -50,7 +50,7 @@ const getOrCreateUser = async (req) => {
     return user;
   }
 
-  const auth = req.auth();
+  const auth = typeof req.auth === "function" ? req.auth() : req.auth || {};
   const clerkId = auth.userId;
   if (!clerkId) {
     throw new Error("Unauthorized");

@@ -1,5 +1,6 @@
 const ExamAssignment = require("../models/ExamAssignment");
 const ExamSubmission = require("../models/ExamSubmission");
+const User = require("../models/User");
 
 const toUploadedFile = (file) => {
   if (!file) return undefined;
@@ -30,6 +31,9 @@ exports.createAssignment = async (req, res) => {
       variant,
       createdByRole,
       createdByEmail,
+      targetStudentId,
+      targetStudentEmail,
+      targetStudentName,
     } = req.body;
 
     if (!title || !type || !board || !className || !subject) {
@@ -46,6 +50,47 @@ exports.createAssignment = async (req, res) => {
       });
     }
 
+    let targetStudent;
+    const normalizedTargetEmail = String(targetStudentEmail || "").trim().toLowerCase();
+
+    if (targetStudentId || normalizedTargetEmail) {
+      const student = targetStudentId
+        ? await User.findById(targetStudentId).select("name email board studentClass role").lean()
+        : await User.findOne({ email: normalizedTargetEmail }).select("name email board studentClass role").lean();
+
+      if (!student || student.role === "teacher" || student.role === "admin") {
+        return res.status(400).json({
+          success: false,
+          error: "Select a valid student for this assignment.",
+        });
+      }
+
+      if (student.board && student.board !== board) {
+        return res.status(400).json({
+          success: false,
+          error: "Selected student does not belong to this board.",
+        });
+      }
+
+      if (student.studentClass && String(student.studentClass) !== String(className)) {
+        return res.status(400).json({
+          success: false,
+          error: "Selected student does not belong to this class.",
+        });
+      }
+
+      targetStudent = {
+        user: student._id,
+        name: student.name || targetStudentName || "Student",
+        email: student.email || normalizedTargetEmail,
+      };
+    } else if (normalizedTargetEmail) {
+      targetStudent = {
+        name: targetStudentName || "Student",
+        email: normalizedTargetEmail,
+      };
+    }
+
     const assignment = await ExamAssignment.create({
       title,
       type,
@@ -57,6 +102,7 @@ exports.createAssignment = async (req, res) => {
       durationMinutes: durationMinutes ? Number(durationMinutes) : undefined,
       quizConfig: type === "quiz" ? { year, season, paperName, variant } : undefined,
       questionPaper: type === "paper" ? toUploadedFile(req.file) : undefined,
+      targetStudent,
       createdByRole: createdByRole === "teacher" ? "teacher" : "admin",
       createdByEmail,
       status: "published",
@@ -76,12 +122,20 @@ exports.createAssignment = async (req, res) => {
 
 exports.getAssignments = async (req, res) => {
   try {
-    const { board, className, subject } = req.query;
+    const { board, className, subject, studentEmail } = req.query;
     const filter = { status: "published" };
 
     if (board) filter.board = board;
     if (className) filter.className = className;
     if (subject) filter.subject = subject;
+    if (studentEmail) {
+      const email = String(studentEmail).trim().toLowerCase();
+      filter.$or = [
+        { "targetStudent.email": { $exists: false } },
+        { "targetStudent.email": "" },
+        { "targetStudent.email": email },
+      ];
+    }
 
     const assignments = await ExamAssignment.find(filter).sort({ createdAt: -1 }).lean();
 

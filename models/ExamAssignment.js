@@ -38,6 +38,23 @@ const examAssignmentSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+    targetStudent: {
+      user: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+      },
+      name: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+      email: {
+        type: String,
+        default: "",
+        trim: true,
+        lowercase: true,
+      },
+    },
     instructions: {
       type: String,
       default: "",
@@ -72,5 +89,6 @@ const examAssignmentSchema = new mongoose.Schema(
 );
 
 examAssignmentSchema.index({ board: 1, className: 1, subject: 1, status: 1 });
+examAssignmentSchema.index({ "targetStudent.email": 1, status: 1 });
 
 module.exports = mongoose.model("ExamAssignment", examAssignmentSchema);
