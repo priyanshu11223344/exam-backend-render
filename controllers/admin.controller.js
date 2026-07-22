@@ -14,6 +14,13 @@ const ADMIN_PERMISSIONS = [
   "overview", "content", "questions", "assignments", "teachers",
   "remarks", "students", "plans", "links", "users_manage",
 ];
+const LEGACY_STUDENT_ROLE_FILTER = {
+  $or: [{ role: "user" }, { role: { $exists: false } }, { role: null }, { role: "" }],
+};
+const normalizeLegacyRole = (user) => ({
+  ...user,
+  role: ["admin", "staff", "teacher", "user"].includes(user.role) ? user.role : "user",
+});
 
 const {
   processPaperRow,
@@ -186,8 +193,8 @@ exports.getDashboardSummary = async (req, res) => {
       }),
       Plan.countDocuments(),
       Plan.countDocuments({ isActive: true }),
-      User.countDocuments({ role: "user" }),
-      User.countDocuments({ role: "user", planId: { $ne: null } }),
+      User.countDocuments(LEGACY_STUDENT_ROLE_FILTER),
+      User.countDocuments({ $and: [LEGACY_STUDENT_ROLE_FILTER, { planId: { $ne: null } }] }),
       User.countDocuments({ role: "teacher" }),
       Paper.find()
         .sort({ updatedAt: -1 })
@@ -249,7 +256,10 @@ exports.getDashboardSummary = async (req, res) => {
     const visibleRoles = permissions.has("users_manage")
       ? ["user", "teacher", "staff"]
       : [permissions.has("students") ? "user" : null, permissions.has("teachers") ? "teacher" : null].filter(Boolean);
-    const visibleRecentUsers = isSuperAdmin ? recentUsers : recentUsers.filter((user) => visibleRoles.includes(user.role));
+    const normalizedRecentUsers = recentUsers.map(normalizeLegacyRole);
+    const visibleRecentUsers = isSuperAdmin
+      ? normalizedRecentUsers
+      : normalizedRecentUsers.filter((user) => visibleRoles.includes(user.role));
 
     res.json({
       success: true,
@@ -286,11 +296,16 @@ exports.getDashboardSummary = async (req, res) => {
 exports.getUsers = async (req, res) => {
   try {
     const permissions = new Set(req.currentUser?.adminPermissions || []);
-    const roleFilter = req.currentUser?.role === "admin"
-      ? {}
-      : permissions.has("users_manage")
-        ? { role: { $in: ["user", "teacher", "staff"] } }
-        : { role: { $in: [permissions.has("students") ? "user" : null, permissions.has("teachers") ? "teacher" : null].filter(Boolean) } };
+    let roleFilter = {};
+    if (req.currentUser?.role !== "admin") {
+      const canReadStudents = permissions.has("students") || permissions.has("users_manage");
+      const allowedRoles = permissions.has("users_manage")
+        ? ["user", "teacher", "staff"]
+        : [canReadStudents ? "user" : null, permissions.has("teachers") ? "teacher" : null].filter(Boolean);
+      roleFilter = canReadStudents
+        ? { $or: [{ role: { $in: allowedRoles } }, { role: { $exists: false } }, { role: null }, { role: "" }] }
+        : { role: { $in: allowedRoles } };
+    }
     const users = await User.find(roleFilter)
       .sort({ updatedAt: -1 })
       .limit(100)
@@ -300,7 +315,7 @@ exports.getUsers = async (req, res) => {
     res.json({
       success: true,
       count: users.length,
-      data: users,
+      data: users.map(normalizeLegacyRole),
     });
   } catch (err) {
     res.status(500).json({
