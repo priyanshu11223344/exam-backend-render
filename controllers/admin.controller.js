@@ -8,6 +8,12 @@ const Paper = require("../models/Paper");
 const PaperName = require("../models/PaperName");
 const Plan = require("../models/Plan");
 const User = require("../models/User");
+const { clerkClient } = require("@clerk/express");
+
+const ADMIN_PERMISSIONS = [
+  "overview", "content", "questions", "assignments", "teachers",
+  "remarks", "students", "plans", "links", "users_manage",
+];
 
 const {
   processPaperRow,
@@ -180,8 +186,8 @@ exports.getDashboardSummary = async (req, res) => {
       }),
       Plan.countDocuments(),
       Plan.countDocuments({ isActive: true }),
-      User.countDocuments(),
-      User.countDocuments({ planId: { $ne: null } }),
+      User.countDocuments({ role: "user" }),
+      User.countDocuments({ role: "user", planId: { $ne: null } }),
       User.countDocuments({ role: "teacher" }),
       Paper.find()
         .sort({ updatedAt: -1 })
@@ -237,10 +243,18 @@ exports.getDashboardSummary = async (req, res) => {
       };
     });
 
+    const isSuperAdmin = req.currentUser?.role === "admin";
+    const permissions = new Set(req.currentUser?.adminPermissions || []);
+    const include = (...items) => isSuperAdmin || items.some((item) => permissions.has(item));
+    const visibleRoles = permissions.has("users_manage")
+      ? ["user", "teacher", "staff"]
+      : [permissions.has("students") ? "user" : null, permissions.has("teachers") ? "teacher" : null].filter(Boolean);
+    const visibleRecentUsers = isSuperAdmin ? recentUsers : recentUsers.filter((user) => visibleRoles.includes(user.role));
+
     res.json({
       success: true,
       data: {
-        counts: {
+        counts: include("overview") ? {
           boards: boardCount,
           subjects: subjectCount,
           topics: topicCount,
@@ -254,11 +268,11 @@ exports.getDashboardSummary = async (req, res) => {
           users: userCount,
           paidUsers: paidUserCount,
           teachers: teacherCount,
-        },
-        recentQuestions,
-        recentUsers,
-        contentMap,
-        plans,
+        } : {},
+        recentQuestions: include("overview", "questions", "assignments") ? recentQuestions : [],
+        recentUsers: include("overview", "students", "teachers", "users_manage") ? visibleRecentUsers : [],
+        contentMap: include("overview", "content", "questions", "assignments") ? contentMap : [],
+        plans: include("overview", "plans", "students") ? plans : [],
       },
     });
   } catch (err) {
@@ -271,10 +285,16 @@ exports.getDashboardSummary = async (req, res) => {
 
 exports.getUsers = async (req, res) => {
   try {
-    const users = await User.find()
+    const permissions = new Set(req.currentUser?.adminPermissions || []);
+    const roleFilter = req.currentUser?.role === "admin"
+      ? {}
+      : permissions.has("users_manage")
+        ? { role: { $in: ["user", "teacher", "staff"] } }
+        : { role: { $in: [permissions.has("students") ? "user" : null, permissions.has("teachers") ? "teacher" : null].filter(Boolean) } };
+    const users = await User.find(roleFilter)
       .sort({ updatedAt: -1 })
       .limit(100)
-      .select("name email role age board school studentClass planName planExpiry createdAt updatedAt")
+      .select("name email role adminPermissions age board school studentClass planName planExpiry createdAt updatedAt")
       .lean();
 
     res.json({
@@ -287,6 +307,76 @@ exports.getUsers = async (req, res) => {
       success: false,
       error: err.message,
     });
+  }
+};
+
+exports.createUserByAdmin = async (req, res) => {
+  let clerkUser;
+  try {
+    const name = String(req.body.name || "").trim();
+    const email = String(req.body.email || "").trim().toLowerCase();
+    const temporaryPassword = String(req.body.temporaryPassword || "");
+    const role = String(req.body.role || "user");
+    const allowedRoles = ["user", "teacher", "staff"];
+
+    if (!name || !/^\S+@\S+\.\S+$/.test(email) || temporaryPassword.length < 8) {
+      return res.status(400).json({ success: false, error: "Name, a valid email and a password of at least 8 characters are required." });
+    }
+    if (!allowedRoles.includes(role)) {
+      return res.status(400).json({ success: false, error: "Select a valid non-superadmin role." });
+    }
+
+    const board = String(req.body.board || "").trim();
+    const studentClass = String(req.body.studentClass || "").trim();
+    if (role === "user") {
+      if (!board || !/^(?:[1-9]|1[0-2])$/.test(studentClass)) {
+        return res.status(400).json({ success: false, error: "Board and class are required for student accounts." });
+      }
+      if (!(await Board.exists({ name: board }))) {
+        return res.status(400).json({ success: false, error: "Select a valid board." });
+      }
+    }
+
+    const adminPermissions = role === "staff"
+      ? [...new Set((Array.isArray(req.body.adminPermissions) ? req.body.adminPermissions : []).filter((item) => ADMIN_PERMISSIONS.includes(item)))]
+      : [];
+    if (role === "staff" && adminPermissions.length === 0) {
+      return res.status(400).json({ success: false, error: "Select at least one permission for an admin staff account." });
+    }
+    if (await User.exists({ email })) {
+      return res.status(409).json({ success: false, error: "A user with this email already exists." });
+    }
+
+    const nameParts = name.split(/\s+/);
+    clerkUser = await clerkClient.users.createUser({
+      emailAddress: [email],
+      password: temporaryPassword,
+      firstName: nameParts.shift(),
+      lastName: nameParts.join(" ") || undefined,
+      publicMetadata: { role },
+    });
+
+    const user = await User.create({
+      clerkId: clerkUser.id,
+      name,
+      email,
+      role,
+      adminPermissions,
+      board: role === "user" ? board : "",
+      school: role === "user" ? String(req.body.school || "").trim() : "",
+      studentClass: role === "user" ? studentClass : "",
+      profileCompletedAt: role === "user" ? new Date() : null,
+    });
+
+    return res.status(201).json({
+      success: true,
+      data: user.toObject(),
+      message: "Account created. Share the temporary password securely and ask the user to change it after signing in.",
+    });
+  } catch (err) {
+    if (clerkUser?.id) await clerkClient.users.deleteUser(clerkUser.id).catch(() => {});
+    const clerkMessage = err?.errors?.[0]?.longMessage || err?.errors?.[0]?.message;
+    return res.status(err?.status || 500).json({ success: false, error: clerkMessage || err.message });
   }
 };
 
@@ -350,7 +440,7 @@ exports.updateUserByAdmin = async (req, res) => {
       { $set: updates },
       { new: true, runValidators: true }
     )
-      .select("name email role age board school studentClass planName planExpiry createdAt updatedAt")
+      .select("name email role adminPermissions age board school studentClass planName planExpiry createdAt updatedAt")
       .lean();
 
     if (!user) {

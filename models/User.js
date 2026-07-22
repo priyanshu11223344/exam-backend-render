@@ -13,8 +13,16 @@ const userSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ["admin", "teacher", "user"],
+    enum: ["admin", "staff", "teacher", "user"],
     default: "user"
+  },
+  adminPermissions: {
+    type: [String],
+    enum: [
+      "overview", "content", "questions", "assignments", "teachers",
+      "remarks", "students", "plans", "links", "users_manage"
+    ],
+    default: []
   },
   age:Number,
   board:String,

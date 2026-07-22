@@ -5,6 +5,7 @@ const Board = require("../models/Board");
 const Subject = require("../models/Subject");
 const mongoose = require("mongoose");
 const { processPaperRow } = require("../services/paperUploadService");
+const { clerkClient } = require("@clerk/express");
 
 const normalizeClasses = (classes) => {
   if (typeof classes === "string") {
@@ -59,10 +60,20 @@ const getTeacherUser = async ({ teacherId, teacherEmail, teacherName }) => {
     throw new Error("Teacher user could not be found or created.");
   }
 
+  if (["admin", "staff"].includes(teacher.role)) {
+    throw new Error("Admin accounts cannot be converted into teacher accounts.");
+  }
+
   teacher.role = "teacher";
   if (teacherName) teacher.name = teacherName;
   if (teacherEmail && !teacher.email) teacher.email = teacherEmail.toLowerCase();
   await teacher.save();
+
+  if (teacher.clerkId && !teacher.clerkId.startsWith("manual-teacher:")) {
+    await clerkClient.users.updateUserMetadata(teacher.clerkId, {
+      publicMetadata: { role: "teacher" },
+    });
+  }
 
   return teacher;
 };

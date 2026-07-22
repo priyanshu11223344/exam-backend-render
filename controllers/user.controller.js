@@ -11,6 +11,7 @@ exports.getMe = async (req, res) => {
   try {
     const user = await getOrCreateUser(req);
     const isAdmin = user.role === "admin";
+    const isStaff = user.role === "staff";
     const isTeacher = user.role === "teacher";
     const profileComplete = user.role !== "user" || Boolean(
       String(user.name || "").trim() &&
@@ -21,16 +22,16 @@ exports.getMe = async (req, res) => {
     // ✅ DEFAULT FREE FEATURES
     let features = isAdmin
       ? ["topical", "mcq", "pdf", "years_access"]
-      : ["topical"];
+      : isStaff ? [] : ["topical"];
 
     // ✅ DEFAULT PLAN INFO
-    let activePlanName = isAdmin ? "Admin" : "Free";
+    let activePlanName = isAdmin ? "Admin" : isStaff ? "Admin Staff" : "Free";
     let activePlanExpiry = null;
-    let activeProductType = isAdmin ? "complete" : "free";
+    let activeProductType = isAdmin ? "complete" : isStaff ? "staff" : "free";
 
     // ✅ CHECK IF PLAN EXPIRED
     const isPlanExpired =
-      !isAdmin &&
+      !isAdmin && !isStaff &&
       user.planExpiry &&
       new Date(user.planExpiry) <= new Date();
 
@@ -45,7 +46,7 @@ exports.getMe = async (req, res) => {
 
     // ✅ CHECK ACTIVE PLAN
     const isPlanActive =
-      !isAdmin &&
+      !isAdmin && !isStaff &&
       user.planId &&
       user.planExpiry &&
       new Date(user.planExpiry) > new Date();
@@ -81,6 +82,7 @@ exports.getMe = async (req, res) => {
 
         // 🧠 ROLE
         role: user.role || "user",
+        adminPermissions: user.role === "admin" ? ["*"] : (user.adminPermissions || []),
 
         // 📦 ACTIVE PLAN INFO
         planName: isTeacher ? "Teacher" : activePlanName,

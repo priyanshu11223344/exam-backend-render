@@ -94,7 +94,7 @@ exports.createAssignment = async (req, res) => {
         ? await User.findById(targetStudentId).select("name email board studentClass role").lean()
         : await User.findOne({ email: normalizedTargetEmail }).select("name email board studentClass role").lean();
 
-      if (!student || student.role === "teacher" || student.role === "admin") {
+      if (!student || student.role !== "user") {
         await cleanupUploads(req.file ? [req.file] : []);
         return res.status(400).json({
           success: false,

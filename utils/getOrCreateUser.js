@@ -16,7 +16,7 @@ const getLocalIdentity = (req) => {
   const clerkId = req.get("x-local-clerk-id");
   const email = req.get("x-local-user-email");
   const name = req.get("x-local-user-name") || "Student";
-  const role = ["admin", "teacher", "user"].includes(req.get("x-local-user-role"))
+  const role = ["admin", "staff", "teacher", "user"].includes(req.get("x-local-user-role"))
     ? req.get("x-local-user-role")
     : "user";
 
@@ -56,7 +56,7 @@ const getOrCreateUser = async (req) => {
     throw new Error("Unauthorized");
   }
 
-  const isKnownRole = (value) => ["admin", "teacher", "user"].includes(value);
+  const isKnownRole = (value) => ["admin", "staff", "teacher", "user"].includes(value);
 
   // ✅ FAST: get role from token first (no API call)
   let role = auth.sessionClaims?.public_metadata?.role;

@@ -7,7 +7,7 @@ const requireUser = (roles = []) => async (req, res, next) => {
       return res.status(403).json({ success: false, error: "You do not have permission for this action." });
     }
     const requestedEmail = String(req.body?.teacherEmail || req.query?.teacherEmail || req.body?.userEmail || req.query?.userEmail || "").trim().toLowerCase();
-    if (requestedEmail && user.role !== "admin" && requestedEmail !== String(user.email || "").toLowerCase()) {
+    if (requestedEmail && !["admin", "staff"].includes(user.role) && requestedEmail !== String(user.email || "").toLowerCase()) {
       return res.status(403).json({ success: false, error: "Identity does not match the signed-in user." });
     }
     req.currentUser = user;
