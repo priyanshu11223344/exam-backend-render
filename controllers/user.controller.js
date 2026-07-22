@@ -20,6 +20,7 @@ exports.getMe = async (req, res) => {
     // ✅ DEFAULT PLAN INFO
     let activePlanName = isAdmin ? "Admin" : "Free";
     let activePlanExpiry = null;
+    let activeProductType = isAdmin ? "complete" : "free";
 
     // ✅ CHECK IF PLAN EXPIRED
     const isPlanExpired =
@@ -51,6 +52,7 @@ exports.getMe = async (req, res) => {
         features = plan.features;
         activePlanName = plan.name;
         activePlanExpiry = user.planExpiry;
+        activeProductType = plan.productType || "legacy";
       }
     }
 
@@ -72,6 +74,8 @@ exports.getMe = async (req, res) => {
         // 📦 ACTIVE PLAN INFO
         planName: isTeacher ? "Teacher" : activePlanName,
         planExpiry: activePlanExpiry,
+        productType: isTeacher ? "teacher" : activeProductType,
+        subscriptionScope: user.subscriptionScope || { board: "", subjects: [] },
 
         // 🔐 FEATURES
         features,

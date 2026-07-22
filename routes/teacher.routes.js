@@ -8,11 +8,12 @@ const {
 } = require("../controllers/teacher.controller");
 
 const router = express.Router();
+const requireUser = require("../middleware/requireUser");
 
-router.get("/me", getTeacherContext);
-router.post("/upload-questions", uploadTeacherQuestions);
-router.post("/sessions", createSession);
-router.put("/sessions/:sessionId/remarks", updateSessionRemark);
-router.get("/student-sessions", getStudentSessions);
+router.get("/me", requireUser(["teacher", "admin"]), getTeacherContext);
+router.post("/upload-questions", requireUser(["teacher", "admin"]), uploadTeacherQuestions);
+router.post("/sessions", requireUser(["teacher", "admin"]), createSession);
+router.put("/sessions/:sessionId/remarks", requireUser(["teacher", "admin"]), updateSessionRemark);
+router.get("/student-sessions", requireUser(), getStudentSessions);
 
 module.exports = router;

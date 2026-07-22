@@ -1,7 +1,7 @@
 // utils/getOrCreateUser.js
 
 const User = require("../models/User");
-const { clerkClient } = require("@clerk/clerk-sdk-node");
+const { clerkClient } = require("@clerk/express");
 
 const getLocalIdentity = (req) => {
   const origin = req.get("origin") || "";

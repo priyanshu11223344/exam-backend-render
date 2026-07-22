@@ -2,9 +2,18 @@
 
 const express = require("express");
 const router = express.Router();
+const requireUser = require("../middleware/requireUser");
+router.use(requireUser(["admin"]));
 const multer = require("multer");
 
-const upload = multer({ dest: "uploads/" });
+const upload = multer({
+  dest: "uploads/",
+  limits: { fileSize: 10 * 1024 * 1024, files: 1 },
+  fileFilter: (_req, file, callback) => {
+    const allowed = file.originalname.toLowerCase().endsWith(".xlsx");
+    callback(allowed ? null : new Error("Only .xlsx workbooks are allowed."), allowed);
+  },
+});
 
 const {
   getDashboardSummary,

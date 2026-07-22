@@ -213,10 +213,12 @@ exports.getTeacherContext = async (req, res) => {
         studentClass: { $in: classNames },
       })
         .sort({ studentClass: 1, name: 1 })
+        .limit(500)
         .select("name email school board studentClass age planName updatedAt")
         .lean(),
       ClassSession.find({ teacherEmail: email })
         .sort({ startsAt: 1 })
+        .limit(500)
         .lean(),
     ]);
 
@@ -261,6 +263,14 @@ exports.uploadTeacherQuestions = async (req, res) => {
       return res.status(403).json({ success: false, error: "This teacher has no active class assignment." });
     }
 
+    const allowedSubjects = new Set(assignment.classes.flatMap((entry) => entry.subjects || []));
+    const invalidRow = rows.find((row) => allowedSubjects.size && !allowedSubjects.has(String(row.subject || "").trim()));
+    if (invalidRow) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(403).json({ success: false, error: `Subject ${invalidRow.subject || "(missing)"} is not assigned to this teacher.` });
+    }
+
     let inserted = 0;
     let updated = 0;
     let skipped = 0;
@@ -301,6 +311,9 @@ exports.createSession = async (req, res) => {
       startsAt,
       endsAt,
       meetingLink,
+      topicTaught,
+      specificComments,
+      studentFeedback,
     } = req.body;
 
     if (!teacherEmail || !board || !className || !subject || !title || !startsAt) {
@@ -344,6 +357,9 @@ exports.createSession = async (req, res) => {
       startsAt,
       endsAt: endsAt || undefined,
       meetingLink,
+      topicTaught,
+      specificComments,
+      studentFeedback,
     });
 
     res.status(201).json({ success: true, data: session });
@@ -354,7 +370,7 @@ exports.createSession = async (req, res) => {
 
 exports.updateSessionRemark = async (req, res) => {
   try {
-    const { teacherRemark, teacherIssues, status } = req.body;
+    const { teacherRemark, teacherIssues, topicTaught, specificComments, studentFeedback, status } = req.body;
 
     const session = await ClassSession.findByIdAndUpdate(
       req.params.sessionId,
@@ -362,6 +378,9 @@ exports.updateSessionRemark = async (req, res) => {
         $set: {
           teacherRemark,
           teacherIssues,
+          topicTaught,
+          specificComments,
+          studentFeedback,
           status: status || "completed",
           remarkUpdatedAt: new Date(),
         },

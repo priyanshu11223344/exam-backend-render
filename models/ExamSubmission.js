@@ -7,6 +7,8 @@ const uploadedFileSchema = new mongoose.Schema(
     path: String,
     mimeType: String,
     size: Number,
+    url: String,
+    publicId: String,
   },
   { _id: false }
 );
@@ -38,10 +40,16 @@ const examSubmissionSchema = new mongoose.Schema(
       enum: ["submitted", "graded"],
       default: "submitted",
     },
+    submittedAt: { type: Date, default: Date.now },
+    grade: { type: String, default: "", trim: true, maxlength: 80 },
+    feedback: { type: String, default: "", trim: true, maxlength: 3000 },
+    gradedBy: { type: String, default: "", trim: true, lowercase: true },
+    gradedAt: Date,
   },
   { timestamps: true }
 );
 
 examSubmissionSchema.index({ assignment: 1, userEmail: 1 }, { unique: true });
+examSubmissionSchema.index({ status: 1, updatedAt: -1 });
 
 module.exports = mongoose.model("ExamSubmission", examSubmissionSchema);

@@ -1,5 +1,6 @@
 const express = require("express");
 const router = express.Router();
+const requireUser = require("../middleware/requireUser");
 
 const {
   createPaper,
@@ -10,7 +11,7 @@ const {
 } = require("../controllers/paper.controller");
 
 // Create paper
-router.post("/", createPaper);
+router.post("/", requireUser(["admin"]), createPaper);
 
 // Get papers under topic (paginated)
 router.get("/topic/:topicId", getPapersByTopic);
@@ -22,6 +23,6 @@ router.get("/filter", filterPapers);
 router.get("/:id", getPaperById);
 
 // Delete paper
-router.delete("/:id", deletePaper);
+router.delete("/:id", requireUser(["admin"]), deletePaper);
 
 module.exports = router;

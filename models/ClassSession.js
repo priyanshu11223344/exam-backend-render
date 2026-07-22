@@ -41,6 +41,9 @@ const classSessionSchema = new mongoose.Schema(
     },
     endsAt: Date,
     meetingLink: String,
+    topicTaught: { type: String, default: "", trim: true, maxlength: 500 },
+    specificComments: { type: String, default: "", trim: true, maxlength: 3000 },
+    studentFeedback: { type: String, default: "", trim: true, maxlength: 3000 },
     status: {
       type: String,
       enum: ["scheduled", "completed", "cancelled"],

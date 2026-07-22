@@ -2,11 +2,38 @@
 
 const Plan = require("../models/Plan");
 
+const defaultProducts = [
+  { name: "Topical Questions", productType: "topical", scopeType: "board", features: ["topical", "years_access"], price: 499 },
+  { name: "Test Series", productType: "test_series", scopeType: "board_subject", features: ["test_series", "mcq"], price: 699 },
+  { name: "Complete Learning", productType: "complete", scopeType: "board_subject", features: ["topical", "test_series", "mcq", "years_access"], price: 999 },
+  { name: "Topical + Test Builder", productType: "topical_builder", scopeType: "board", features: ["topical", "pdf", "years_access"], price: 799 },
+];
+
+const ensureDefaultProducts = async () => {
+  await Promise.all(defaultProducts.map((product) => Plan.findOneAndUpdate(
+    { name: product.name },
+    {
+      $set: { productType: product.productType, scopeType: product.scopeType },
+      $setOnInsert: {
+        name: product.name,
+        features: product.features,
+        durations: [
+          { label: "1 month", price: product.price, durationDays: 30 },
+          { label: "6 months", price: product.price * 5, durationDays: 180 },
+          { label: "12 months", price: product.price * 9, durationDays: 365 },
+        ],
+        isActive: true,
+      },
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  )));
+};
+
 
 // ✅ CREATE PLAN (Admin)
 exports.createPlan = async (req, res) => {
   try {
-    const { name, features, durations } = req.body;
+    const { name, features, durations, productType, scopeType } = req.body;
 
     if (!name || !features || !durations) {
       return res.status(400).json({
@@ -24,7 +51,9 @@ exports.createPlan = async (req, res) => {
     const plan = await Plan.create({
       name,
       features,
-      durations
+      durations,
+      productType: productType || "legacy",
+      scopeType: scopeType || "none",
     });
 
     res.status(201).json({
@@ -44,7 +73,8 @@ exports.createPlan = async (req, res) => {
 // ✅ GET ALL ACTIVE PLANS (User)
 exports.getPlans = async (req, res) => {
   try {
-    const plans = await Plan.find({ isActive: true });
+    await ensureDefaultProducts();
+    const plans = await Plan.find({ isActive: true }).sort({ createdAt: 1 });
 
     res.json({
       success: true,
@@ -98,7 +128,7 @@ exports.updatePlan = async (req, res) => {
       }
   
       // ❗ 2. Allow only specific fields
-      const allowedUpdates = ["name", "features", "durations", "isActive"];
+      const allowedUpdates = ["name", "features", "durations", "isActive", "productType", "scopeType"];
   
       const isValid = Object.keys(updates).every(field =>
         allowedUpdates.includes(field)

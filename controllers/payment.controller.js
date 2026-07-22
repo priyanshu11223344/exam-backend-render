@@ -20,6 +20,7 @@ const activatePlanForLocalUser = async ({ req, plan, selectedDuration }) => {
   const auth = typeof req.auth === "function" ? req.auth() : {};
   const clerkId = auth?.userId || userInfo.clerkId;
   const email = userInfo.email;
+  const purchaseScope = req.body.purchaseScope || {};
 
   if (!clerkId && !email) {
     return null;
@@ -39,6 +40,10 @@ const activatePlanForLocalUser = async ({ req, plan, selectedDuration }) => {
         planId: plan._id,
         planName: plan.name,
         planExpiry: expiry,
+        subscriptionScope: {
+          board: String(purchaseScope.board || "").trim(),
+          subjects: Array.isArray(purchaseScope.subjects) ? purchaseScope.subjects.map(String) : [],
+        },
       },
     },
     {
@@ -55,7 +60,7 @@ const activatePlanForLocalUser = async ({ req, plan, selectedDuration }) => {
 
 exports.createOrder = async (req, res) => {
   try {
-    const { planId, duration } = req.body;
+    const { planId, duration, purchaseScope = {} } = req.body;
 
     if (!planId || !duration) {
       return res.status(400).json({ error: "Missing planId or duration" });
@@ -73,6 +78,13 @@ exports.createOrder = async (req, res) => {
 
     if (!selectedDuration) {
       return res.status(400).json({ error: "Invalid duration" });
+    }
+
+    if (plan.scopeType !== "none" && !String(purchaseScope.board || "").trim()) {
+      return res.status(400).json({ error: "Select a board for this plan." });
+    }
+    if (plan.scopeType === "board_subject" && !purchaseScope.subjects?.length) {
+      return res.status(400).json({ error: "Select at least one subject for this plan." });
     }
 
     const amount = selectedDuration.price * 100; // Razorpay uses paise
@@ -129,7 +141,8 @@ exports.verifyPayment = async (req, res) => {
       razorpay_payment_id,
       razorpay_signature,
       planId,
-      durationLabel
+      durationLabel,
+      purchaseScope = {},
     } = req.body;
 
     // 🔐 Verify signature
@@ -171,6 +184,10 @@ exports.verifyPayment = async (req, res) => {
     user.planId = plan._id;
     user.planName = plan.name;
     user.planExpiry = expiry;
+    user.subscriptionScope = {
+      board: String(purchaseScope.board || "").trim(),
+      subjects: Array.isArray(purchaseScope.subjects) ? purchaseScope.subjects.map(String) : [],
+    };
 
     await user.save();
 

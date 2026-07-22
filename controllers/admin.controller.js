@@ -1,4 +1,5 @@
-const XLSX = require("xlsx");
+const readXlsxFile = require("read-excel-file/node");
+const fs = require("fs/promises");
 const mongoose = require("mongoose");
 const Board = require("../models/Board");
 const Subject = require("../models/Subject");
@@ -22,13 +23,14 @@ exports.uploadExcel = async (req, res) => {
   session.startTransaction();
 
   try {
-    const workbook = XLSX.readFile(req.file.path);
-
-    const sheet =
-      workbook.Sheets[workbook.SheetNames[0]];
-
-    const rows =
-      XLSX.utils.sheet_to_json(sheet);
+    if (!req.file) return res.status(400).json({ error: "Upload an .xlsx file." });
+    const sheetRows = await readXlsxFile(req.file.path);
+    await fs.unlink(req.file.path).catch(() => {});
+    if (!sheetRows.length) return res.status(400).json({ error: "The workbook is empty." });
+    const headers = sheetRows[0].map((value) => String(value || "").trim());
+    const rows = sheetRows.slice(1).map((values) => Object.fromEntries(
+      headers.map((header, index) => [header, values[index]]).filter(([header]) => header)
+    )).filter((record) => Object.values(record).some((value) => value !== null && value !== undefined && value !== ""));
 
     let inserted = 0;
     let updated = 0;
@@ -55,6 +57,7 @@ exports.uploadExcel = async (req, res) => {
       skipped,
     });
   } catch (err) {
+    if (req.file?.path) await fs.unlink(req.file.path).catch(() => {});
     await session.abortTransaction();
 
     session.endSession();

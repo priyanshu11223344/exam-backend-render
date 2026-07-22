@@ -34,6 +34,11 @@ const userSchema = new mongoose.Schema({
   planExpiry: {
     type: Date,
     default: null
+  },
+
+  subscriptionScope: {
+    board: { type: String, default: "", trim: true },
+    subjects: { type: [String], default: [] }
   }
 
 }, { timestamps: true });

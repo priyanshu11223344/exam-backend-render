@@ -2,6 +2,7 @@ const Topic = require("../models/Topic");
 const Subject = require("../models/Subject");
 const Paper = require("../models/Paper");
 const getUserContext = require("../utils/getUserContext");
+const assertSubscriptionScope = require("../utils/assertSubscriptionScope");
 exports.createPaper = async (req, res) => {
   try {
     const {
@@ -72,7 +73,13 @@ exports.getPapersByTopic = async (req, res) => {
     const skip = (page - 1) * limit;
 
     // ✅ GET USER FEATURES
-    const { features, isAdmin } = await getUserContext(req);
+    const access = await getUserContext(req);
+    const { features, isAdmin } = access;
+
+    const topic = await Topic.findById(topicId).populate({ path: "subject", select: "name", populate: { path: "board", select: "name" } }).lean();
+    if (!topic || !assertSubscriptionScope(access, topic.subject?.board?.name, topic.subject?.name)) {
+      return res.status(403).json({ success: false, error: "This topic is outside your plan." });
+    }
 
     let filter = { topic: topicId };
 
@@ -113,7 +120,8 @@ exports.filterPapers = async (req, res) => {
       variant,
     } = req.query;
 
-    const { features, isAdmin } = await getUserContext(req);
+    const access = await getUserContext(req);
+    const { features, isAdmin } = access;
 
     const filter = {};
 
@@ -123,6 +131,10 @@ exports.filterPapers = async (req, res) => {
         ? topicIds
         : topicIds.split(",");
       filter.topic = { $in: topicArray };
+      const scopedTopics = await Topic.find({ _id: { $in: topicArray } }).populate({ path: "subject", select: "name", populate: { path: "board", select: "name" } }).lean();
+      if (scopedTopics.some((topic) => !assertSubscriptionScope(access, topic.subject?.board?.name, topic.subject?.name))) {
+        return res.status(403).json({ success: false, error: "One or more selected topics are outside your plan." });
+      }
     }
 
     // Years
@@ -181,7 +193,8 @@ exports.filterPapers = async (req, res) => {
 
 exports.getPaperById = async (req, res) => {
   try {
-    const { features, isAdmin } = await getUserContext(req);
+    const access = await getUserContext(req);
+    const { features, isAdmin } = access;
 
     const paper = await Paper.findById(req.params.id)
       .populate({
@@ -206,6 +219,10 @@ exports.getPaperById = async (req, res) => {
       return res.status(404).json({
         message: "Paper not found",
       });
+    }
+
+    if (!assertSubscriptionScope(access, paper.topic?.subject?.board?.name, paper.topic?.subject?.name)) {
+      return res.status(403).json({ success: false, message: "This paper is outside your plan." });
     }
 
     // 🔐 BLOCK ACCESS

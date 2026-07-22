@@ -12,11 +12,14 @@ const getUserContext = async (req) => {
       user,
       features: ["topical", "mcq", "pdf", "years_access"],
       isAdmin: true,
+      productType: "complete",
+      subscriptionScope: { board: "", subjects: [] },
     };
   }
 
   // ✅ DEFAULT FREE FEATURES
   let features = ["topical"];
+  let productType = "free";
 
   // ✅ CHECK IF PLAN EXPIRED
   const isPlanExpired =
@@ -44,6 +47,7 @@ const getUserContext = async (req) => {
 
     if (plan) {
       features = plan.features;
+      productType = plan.productType || "legacy";
     }
   }
 
@@ -51,6 +55,8 @@ const getUserContext = async (req) => {
     user,
     features,
     isAdmin: false,
+    productType,
+    subscriptionScope: user.subscriptionScope || { board: "", subjects: [] },
   };
 };
 

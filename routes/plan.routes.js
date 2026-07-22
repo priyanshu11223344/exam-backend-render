@@ -2,6 +2,7 @@
 
 const express = require("express");
 const router = express.Router();
+const requireUser = require("../middleware/requireUser");
 
 const {
   createPlan,
@@ -13,10 +14,10 @@ const {
 
 // 🔐 Later you can add admin middleware here
 
-router.post("/", createPlan);        // Admin
+router.post("/", requireUser(["admin"]), createPlan);        // Admin
 router.get("/", getPlans);           // Public
 router.get("/:id", getPlanById);     // Public
-router.put("/:id", updatePlan);      // Admin
-router.delete("/:id", deletePlan);   // Admin
+router.put("/:id", requireUser(["admin"]), updatePlan);      // Admin
+router.delete("/:id", requireUser(["admin"]), deletePlan);   // Admin
 
 module.exports = router;

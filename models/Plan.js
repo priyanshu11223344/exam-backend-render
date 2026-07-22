@@ -16,6 +16,19 @@ const planSchema = new mongoose.Schema({
     }
   ],
 
+  productType: {
+    type: String,
+    enum: ["topical", "test_series", "complete", "topical_builder", "legacy"],
+    default: "legacy",
+    index: true
+  },
+
+  scopeType: {
+    type: String,
+    enum: ["board", "board_subject", "none"],
+    default: "none"
+  },
+
   durations: [
     {
       label: {

@@ -2,6 +2,8 @@ const Board = require("../models/Board");
 const Subject = require("../models/Subject");
 const Paper = require("../models/Paper");
 const PaperName = require("../models/PaperName");
+const getUserContext = require("../utils/getUserContext");
+const assertSubscriptionScope = require("../utils/assertSubscriptionScope");
 
 exports.getQuizQuestions = async (req, res) => {
   try {
@@ -30,6 +32,14 @@ exports.getQuizQuestions = async (req, res) => {
         success: false,
         message: "All fields are required",
       });
+    }
+
+    const access = await getUserContext(req);
+    if (!access.isAdmin && !access.features.includes("mcq")) {
+      return res.status(403).json({ success: false, message: "Your plan does not include MCQ tests." });
+    }
+    if (!assertSubscriptionScope(access, board, subject)) {
+      return res.status(403).json({ success: false, message: "This board or subject is outside your plan." });
     }
 
     /* ===============================

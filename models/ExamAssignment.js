@@ -7,6 +7,8 @@ const uploadedFileSchema = new mongoose.Schema(
     path: String,
     mimeType: String,
     size: Number,
+    url: String,
+    publicId: String,
   },
   { _id: false }
 );
@@ -22,6 +24,12 @@ const examAssignmentSchema = new mongoose.Schema(
       type: String,
       enum: ["quiz", "paper"],
       required: true,
+    },
+    audience: {
+      type: String,
+      enum: ["class", "subscribers"],
+      default: "class",
+      index: true,
     },
     board: {
       type: String,

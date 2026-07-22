@@ -2,24 +2,17 @@ const ExamAssignment = require("../models/ExamAssignment");
 const ExamSubmission = require("../models/ExamSubmission");
 const User = require("../models/User");
 const TeacherAssignment = require("../models/TeacherAssignment");
+const storeUploadedFile = require("../utils/storeUploadedFile");
+const fs = require("fs/promises");
 
-const toUploadedFile = (file) => {
-  if (!file) return undefined;
-
-  return {
-    originalName: file.originalname,
-    filename: file.filename,
-    path: `/uploads/${file.filename}`,
-    mimeType: file.mimetype,
-    size: file.size,
-  };
-};
+const cleanupUploads = async (files) => Promise.all((files || []).map((file) => fs.unlink(file.path).catch(() => {})));
 
 exports.createAssignment = async (req, res) => {
   try {
     const {
       title,
       type,
+      audience = "class",
       board,
       className,
       subject,
@@ -36,8 +29,11 @@ exports.createAssignment = async (req, res) => {
       targetStudentEmail,
       targetStudentName,
     } = req.body;
+    const actorRole = req.currentUser?.role || createdByRole;
+    const actorEmail = String(req.currentUser?.email || createdByEmail || "").toLowerCase();
 
-    if (!title || !type || !board || !className || !subject) {
+    if (!title || !type || !board || !subject || (audience === "class" && !className)) {
+      await cleanupUploads(req.file ? [req.file] : []);
       return res.status(400).json({
         success: false,
         error: "Title, type, board, class and subject are required.",
@@ -51,9 +47,9 @@ exports.createAssignment = async (req, res) => {
       });
     }
 
-    if (createdByRole === "teacher") {
+    if (actorRole === "teacher") {
       const teacherAssignment = await TeacherAssignment.findOne({
-        teacherEmail: String(createdByEmail || "").toLowerCase(),
+        teacherEmail: actorEmail,
         board,
         "classes.className": className,
         active: true,
@@ -61,6 +57,7 @@ exports.createAssignment = async (req, res) => {
       const assignedClass = teacherAssignment?.classes?.find((entry) => entry.className === className);
 
       if (!assignedClass) {
+        await cleanupUploads(req.file ? [req.file] : []);
         return res.status(403).json({
           success: false,
           error: "This class is not assigned to the teacher.",
@@ -68,6 +65,7 @@ exports.createAssignment = async (req, res) => {
       }
 
       if (assignedClass.subjects?.length && !assignedClass.subjects.includes(subject)) {
+        await cleanupUploads(req.file ? [req.file] : []);
         return res.status(403).json({
           success: false,
           error: "This subject is not assigned to the teacher for the selected class.",
@@ -84,6 +82,7 @@ exports.createAssignment = async (req, res) => {
         : await User.findOne({ email: normalizedTargetEmail }).select("name email board studentClass role").lean();
 
       if (!student || student.role === "teacher" || student.role === "admin") {
+        await cleanupUploads(req.file ? [req.file] : []);
         return res.status(400).json({
           success: false,
           error: "Select a valid student for this assignment.",
@@ -91,6 +90,7 @@ exports.createAssignment = async (req, res) => {
       }
 
       if (student.board && student.board !== board) {
+        await cleanupUploads(req.file ? [req.file] : []);
         return res.status(400).json({
           success: false,
           error: "Selected student does not belong to this board.",
@@ -98,6 +98,7 @@ exports.createAssignment = async (req, res) => {
       }
 
       if (student.studentClass && String(student.studentClass) !== String(className)) {
+        await cleanupUploads(req.file ? [req.file] : []);
         return res.status(400).json({
           success: false,
           error: "Selected student does not belong to this class.",
@@ -116,20 +117,22 @@ exports.createAssignment = async (req, res) => {
       };
     }
 
+    const storedQuestionPaper = type === "paper" ? await storeUploadedFile(req.file, "aurethia/assignments") : undefined;
     const assignment = await ExamAssignment.create({
       title,
       type,
+      audience: audience === "subscribers" ? "subscribers" : "class",
       board,
-      className,
+      className: audience === "subscribers" ? "SUBSCRIBERS" : className,
       subject,
       instructions,
       dueAt: dueAt || undefined,
       durationMinutes: durationMinutes ? Number(durationMinutes) : undefined,
       quizConfig: type === "quiz" ? { year, season, paperName, variant } : undefined,
-      questionPaper: type === "paper" ? toUploadedFile(req.file) : undefined,
+      questionPaper: storedQuestionPaper,
       targetStudent,
-      createdByRole: createdByRole === "teacher" ? "teacher" : "admin",
-      createdByEmail,
+      createdByRole: actorRole === "teacher" ? "teacher" : "admin",
+      createdByEmail: actorEmail,
       status: "published",
     });
 
@@ -138,6 +141,7 @@ exports.createAssignment = async (req, res) => {
       data: assignment,
     });
   } catch (err) {
+    await cleanupUploads(req.file ? [req.file] : []);
     res.status(500).json({
       success: false,
       error: err.message,
@@ -147,12 +151,13 @@ exports.createAssignment = async (req, res) => {
 
 exports.getAssignments = async (req, res) => {
   try {
-    const { board, className, subject, studentEmail } = req.query;
+    const { board, className, subject, studentEmail, audience } = req.query;
     const filter = { status: "published" };
 
     if (board) filter.board = board;
     if (className) filter.className = className;
     if (subject) filter.subject = subject;
+    if (audience) filter.audience = audience;
     if (studentEmail) {
       const email = String(studentEmail).trim().toLowerCase();
       filter.$or = [
@@ -162,12 +167,18 @@ exports.getAssignments = async (req, res) => {
       ];
     }
 
-    const assignments = await ExamAssignment.find(filter).sort({ createdAt: -1 }).lean();
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
+    const [assignments, total] = await Promise.all([
+      ExamAssignment.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+      ExamAssignment.countDocuments(filter),
+    ]);
 
     res.json({
       success: true,
       count: assignments.length,
       data: assignments,
+      pagination: { page, limit, total, pages: Math.ceil(total / limit) },
     });
   } catch (err) {
     res.status(500).json({
@@ -183,6 +194,7 @@ exports.submitAnswerSheets = async (req, res) => {
     const { userEmail, userName } = req.body;
 
     if (!userEmail) {
+      await cleanupUploads(req.files);
       return res.status(400).json({
         success: false,
         error: "Student email is required.",
@@ -196,13 +208,25 @@ exports.submitAnswerSheets = async (req, res) => {
       });
     }
 
+    const assignmentRecord = await ExamAssignment.findById(assignmentId).select("dueAt status").lean();
+    if (!assignmentRecord || assignmentRecord.status !== "published") {
+      await cleanupUploads(req.files);
+      return res.status(404).json({ success: false, error: "This assignment is no longer available." });
+    }
+    if (assignmentRecord.dueAt && new Date(assignmentRecord.dueAt) < new Date()) {
+      await cleanupUploads(req.files);
+      return res.status(409).json({ success: false, error: "The submission deadline has passed." });
+    }
+
+    const storedAnswerSheets = await Promise.all(req.files.map((file) => storeUploadedFile(file, "aurethia/submissions")));
     const submission = await ExamSubmission.findOneAndUpdate(
       { assignment: assignmentId, userEmail },
       {
         $set: {
           userName,
-          answerSheets: req.files.map(toUploadedFile),
+          answerSheets: storedAnswerSheets,
           status: "submitted",
+          submittedAt: new Date(),
         },
       },
       {
@@ -217,6 +241,7 @@ exports.submitAnswerSheets = async (req, res) => {
       data: submission,
     });
   } catch (err) {
+    await cleanupUploads(req.files);
     res.status(500).json({
       success: false,
       error: err.message,
@@ -236,6 +261,14 @@ exports.submitQuizResult = async (req, res) => {
       });
     }
 
+    const assignmentRecord = await ExamAssignment.findById(assignmentId).select("dueAt status").lean();
+    if (!assignmentRecord || assignmentRecord.status !== "published") {
+      return res.status(404).json({ success: false, error: "This test is no longer available." });
+    }
+    if (assignmentRecord.dueAt && new Date(assignmentRecord.dueAt) < new Date()) {
+      return res.status(409).json({ success: false, error: "The test deadline has passed." });
+    }
+
     const submission = await ExamSubmission.findOneAndUpdate(
       { assignment: assignmentId, userEmail },
       {
@@ -243,6 +276,7 @@ exports.submitQuizResult = async (req, res) => {
           userName,
           quizResult: { score, total, answers },
           status: "submitted",
+          submittedAt: new Date(),
         },
       },
       {
@@ -261,5 +295,21 @@ exports.submitQuizResult = async (req, res) => {
       success: false,
       error: err.message,
     });
+  }
+};
+
+exports.getMySubmissions = async (req, res) => {
+  try {
+    const userEmail = String(req.query.userEmail || "").trim().toLowerCase();
+    if (!userEmail) return res.status(400).json({ success: false, error: "Student email is required." });
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 25));
+    const [data, total] = await Promise.all([
+      ExamSubmission.find({ userEmail }).populate("assignment", "title subject className dueAt type").sort({ updatedAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+      ExamSubmission.countDocuments({ userEmail }),
+    ]);
+    return res.json({ success: true, data, pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
   }
 };
