@@ -12,6 +12,11 @@ exports.getMe = async (req, res) => {
     const user = await getOrCreateUser(req);
     const isAdmin = user.role === "admin";
     const isTeacher = user.role === "teacher";
+    const profileComplete = user.role !== "user" || Boolean(
+      String(user.name || "").trim() &&
+      String(user.board || "").trim() &&
+      String(user.studentClass || "").trim()
+    );
 
     // ✅ DEFAULT FREE FEATURES
     let features = isAdmin
@@ -71,6 +76,8 @@ exports.getMe = async (req, res) => {
         studentClass: user.studentClass || "",
         createdAt: user.createdAt,
         updatedAt: user.updatedAt,
+        profileComplete,
+        profileCompletedAt: user.profileCompletedAt,
 
         // 🧠 ROLE
         role: user.role || "user",
@@ -119,6 +126,17 @@ exports.updateMe = async (req, res) => {
       }
     });
 
+    const effectiveName = String(updates.name ?? user.name ?? "").trim();
+    const effectiveBoard = String(updates.board ?? user.board ?? "").trim();
+    const effectiveClass = String(updates.studentClass ?? user.studentClass ?? "").trim();
+
+    if (user.role === "user" && (!effectiveName || !effectiveBoard || !effectiveClass)) {
+      return res.status(400).json({
+        success: false,
+        error: "Full name, board and class are required for every student profile.",
+      });
+    }
+
     if (updates.board) {
       const boardExists = await Board.exists({ name: updates.board });
       if (!boardExists) {
@@ -136,6 +154,10 @@ exports.updateMe = async (req, res) => {
         return res.status(400).json({ success: false, error: "Enter a valid age." });
       }
       updates.age = age;
+    }
+
+    if (user.role === "user" && !user.profileCompletedAt) {
+      updates.profileCompletedAt = new Date();
     }
 
     const updatedUser = await User.findByIdAndUpdate(

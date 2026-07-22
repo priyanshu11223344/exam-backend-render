@@ -20,6 +20,10 @@ const userSchema = new mongoose.Schema({
   board:String,
   school:String,
   studentClass:String,
+  profileCompletedAt: {
+    type: Date,
+    default: null
+  },
   planId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Plan",
