@@ -19,7 +19,7 @@ const upload = multer({
   },
 });
 
-router.get("/assignments", getAssignments);
+router.get("/assignments", requireUser(), getAssignments);
 router.post("/assignments", requireUser(["admin", "teacher"]), upload.single("questionPaper"), createAssignment);
 router.get("/submissions", requireUser(), getMySubmissions);
 router.post(
@@ -28,6 +28,6 @@ router.post(
   upload.array("answerSheets", 10),
   submitAnswerSheets
 );
-router.post("/assignments/:assignmentId/quiz-result", submitQuizResult);
+router.post("/assignments/:assignmentId/quiz-result", requireUser(), submitQuizResult);
 
 module.exports = router;

@@ -208,7 +208,7 @@ exports.getTeacherContext = async (req, res) => {
 
     const [students, sessions] = await Promise.all([
       User.find({
-        role: { $ne: "teacher" },
+        role: "user",
         board: assignment.board,
         studentClass: { $in: classNames },
       })
@@ -230,6 +230,41 @@ exports.getTeacherContext = async (req, res) => {
         sessions,
       },
     });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+exports.getStudentWorkspace = async (req, res) => {
+  try {
+    const currentUser = req.currentUser;
+    const board = String(currentUser?.board || "").trim();
+    const className = String(currentUser?.studentClass || "").trim();
+
+    if (!board || !className) {
+      return res.json({ success: true, data: { board, className, subjects: [], teachers: [] } });
+    }
+
+    const assignments = await TeacherAssignment.find({
+      board,
+      active: true,
+      classes: { $elemMatch: { className } },
+    })
+      .select("teacherName teacherEmail classes")
+      .sort({ teacherName: 1 })
+      .lean();
+
+    const teachers = assignments.map((assignment) => {
+      const assignedClass = assignment.classes.find((entry) => entry.className === className);
+      return {
+        name: assignment.teacherName,
+        email: assignment.teacherEmail,
+        subjects: assignedClass?.subjects || [],
+      };
+    });
+    const subjects = [...new Set(teachers.flatMap((teacher) => teacher.subjects))].sort();
+
+    res.json({ success: true, data: { board, className, subjects, teachers } });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -431,7 +466,9 @@ exports.updateSuperadminNote = async (req, res) => {
 
 exports.getStudentSessions = async (req, res) => {
   try {
-    const { board, className } = req.query;
+    const currentUser = req.currentUser;
+    const board = currentUser?.role === "admin" ? req.query.board : currentUser?.board;
+    const className = currentUser?.role === "admin" ? req.query.className : currentUser?.studentClass;
 
     if (!board || !className) {
       return res.json({ success: true, count: 0, data: [] });

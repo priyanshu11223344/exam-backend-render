@@ -2,10 +2,23 @@ const ExamAssignment = require("../models/ExamAssignment");
 const ExamSubmission = require("../models/ExamSubmission");
 const User = require("../models/User");
 const TeacherAssignment = require("../models/TeacherAssignment");
+const Paper = require("../models/Paper");
 const storeUploadedFile = require("../utils/storeUploadedFile");
 const fs = require("fs/promises");
 
 const cleanupUploads = async (files) => Promise.all((files || []).map((file) => fs.unlink(file.path).catch(() => {})));
+
+const studentCanAccessAssignment = (assignment, user) => {
+  if (!assignment || !user) return false;
+  const email = String(user.email || "").toLowerCase();
+  if (assignment.targetStudent?.email && assignment.targetStudent.email !== email) return false;
+  if (assignment.audience === "class") {
+    return assignment.board === user.board && String(assignment.className) === String(user.studentClass);
+  }
+  return assignment.board === user.subscriptionScope?.board &&
+    (user.subscriptionScope?.subjects || []).includes(assignment.subject) &&
+    user.planExpiry && new Date(user.planExpiry) > new Date();
+};
 
 exports.createAssignment = async (req, res) => {
   try {
@@ -151,7 +164,23 @@ exports.createAssignment = async (req, res) => {
 
 exports.getAssignments = async (req, res) => {
   try {
-    const { board, className, subject, studentEmail, audience } = req.query;
+    let { board, className, subject, studentEmail, audience } = req.query;
+    if (req.currentUser?.role === "user") {
+      const currentUser = req.currentUser;
+      studentEmail = currentUser.email;
+      if (audience === "subscribers") {
+        board = currentUser.subscriptionScope?.board;
+        className = undefined;
+        if (!currentUser.planExpiry || new Date(currentUser.planExpiry) <= new Date()) {
+          return res.json({ success: true, count: 0, data: [], pagination: { page: 1, limit: 100, total: 0, pages: 0 } });
+        }
+        if (subject && !(currentUser.subscriptionScope?.subjects || []).includes(subject)) subject = "__not_allowed__";
+      } else {
+        audience = "class";
+        board = currentUser.board;
+        className = currentUser.studentClass;
+      }
+    }
     const filter = { status: "published" };
 
     if (board) filter.board = board;
@@ -191,7 +220,8 @@ exports.getAssignments = async (req, res) => {
 exports.submitAnswerSheets = async (req, res) => {
   try {
     const { assignmentId } = req.params;
-    const { userEmail, userName } = req.body;
+    const userEmail = req.currentUser?.email;
+    const userName = req.currentUser?.name;
 
     if (!userEmail) {
       await cleanupUploads(req.files);
@@ -208,7 +238,7 @@ exports.submitAnswerSheets = async (req, res) => {
       });
     }
 
-    const assignmentRecord = await ExamAssignment.findById(assignmentId).select("dueAt status").lean();
+    const assignmentRecord = await ExamAssignment.findById(assignmentId).lean();
     if (!assignmentRecord || assignmentRecord.status !== "published") {
       await cleanupUploads(req.files);
       return res.status(404).json({ success: false, error: "This assignment is no longer available." });
@@ -216,6 +246,10 @@ exports.submitAnswerSheets = async (req, res) => {
     if (assignmentRecord.dueAt && new Date(assignmentRecord.dueAt) < new Date()) {
       await cleanupUploads(req.files);
       return res.status(409).json({ success: false, error: "The submission deadline has passed." });
+    }
+    if (assignmentRecord.type !== "paper" || !studentCanAccessAssignment(assignmentRecord, req.currentUser)) {
+      await cleanupUploads(req.files);
+      return res.status(403).json({ success: false, error: "This paper is not assigned to your account." });
     }
 
     const storedAnswerSheets = await Promise.all(req.files.map((file) => storeUploadedFile(file, "aurethia/submissions")));
@@ -252,7 +286,9 @@ exports.submitAnswerSheets = async (req, res) => {
 exports.submitQuizResult = async (req, res) => {
   try {
     const { assignmentId } = req.params;
-    const { userEmail, userName, score, total, answers } = req.body;
+    const { answers = {} } = req.body;
+    const userEmail = req.currentUser?.email;
+    const userName = req.currentUser?.name;
 
     if (!userEmail) {
       return res.status(400).json({
@@ -261,13 +297,22 @@ exports.submitQuizResult = async (req, res) => {
       });
     }
 
-    const assignmentRecord = await ExamAssignment.findById(assignmentId).select("dueAt status").lean();
+    const assignmentRecord = await ExamAssignment.findById(assignmentId).lean();
     if (!assignmentRecord || assignmentRecord.status !== "published") {
       return res.status(404).json({ success: false, error: "This test is no longer available." });
     }
     if (assignmentRecord.dueAt && new Date(assignmentRecord.dueAt) < new Date()) {
       return res.status(409).json({ success: false, error: "The test deadline has passed." });
     }
+    if (assignmentRecord.type !== "quiz" || !studentCanAccessAssignment(assignmentRecord, req.currentUser)) {
+      return res.status(403).json({ success: false, error: "This test is not assigned to your account." });
+    }
+
+    const questionIds = Object.keys(answers).filter((id) => /^[a-f\d]{24}$/i.test(id));
+    const questions = await Paper.find({ _id: { $in: questionIds }, isMCQ: true }).select("correctAnswer").lean();
+    const total = questions.length;
+    const score = questions.reduce((sum, question) => sum + (answers[String(question._id)] === question.correctAnswer ? 1 : 0), 0);
+    if (!total) return res.status(400).json({ success: false, error: "No valid test answers were submitted." });
 
     const submission = await ExamSubmission.findOneAndUpdate(
       { assignment: assignmentId, userEmail },
@@ -275,7 +320,11 @@ exports.submitQuizResult = async (req, res) => {
         $set: {
           userName,
           quizResult: { score, total, answers },
-          status: "submitted",
+          status: "graded",
+          grade: `${score}/${total}`,
+          feedback: "Automatically marked using the stored answer key.",
+          gradedBy: "system",
+          gradedAt: new Date(),
           submittedAt: new Date(),
         },
       },
@@ -300,7 +349,9 @@ exports.submitQuizResult = async (req, res) => {
 
 exports.getMySubmissions = async (req, res) => {
   try {
-    const userEmail = String(req.query.userEmail || "").trim().toLowerCase();
+    const userEmail = req.currentUser?.role === "admin"
+      ? String(req.query.userEmail || "").trim().toLowerCase()
+      : String(req.currentUser?.email || "").trim().toLowerCase();
     if (!userEmail) return res.status(400).json({ success: false, error: "Student email is required." });
     const page = Math.max(1, Number(req.query.page) || 1);
     const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 25));

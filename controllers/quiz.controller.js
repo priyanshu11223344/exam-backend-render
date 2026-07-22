@@ -4,10 +4,11 @@ const Paper = require("../models/Paper");
 const PaperName = require("../models/PaperName");
 const getUserContext = require("../utils/getUserContext");
 const assertSubscriptionScope = require("../utils/assertSubscriptionScope");
+const ExamAssignment = require("../models/ExamAssignment");
 
 exports.getQuizQuestions = async (req, res) => {
   try {
-    const {
+    let {
       board,
       subject,
       year,
@@ -15,6 +16,26 @@ exports.getQuizQuestions = async (req, res) => {
       paperName,
       variant,
     } = req.query;
+    const assignmentId = req.query.assignmentId;
+    const access = await getUserContext(req);
+    let assignedAccess = false;
+
+    if (assignmentId) {
+      const assignment = await ExamAssignment.findById(assignmentId).lean();
+      const user = access.user;
+      const isTargetStudent = !assignment?.targetStudent?.email || assignment.targetStudent.email === String(user.email || "").toLowerCase();
+      const isClassMember = assignment?.audience === "class" && assignment.board === user.board && String(assignment.className) === String(user.studentClass);
+      const isSubscriber = assignment?.audience === "subscribers" && assignment.board === user.subscriptionScope?.board && (user.subscriptionScope?.subjects || []).includes(assignment.subject);
+      assignedAccess = Boolean(assignment && assignment.type === "quiz" && assignment.status === "published" && isTargetStudent && (isClassMember || isSubscriber));
+      if (!assignedAccess) return res.status(403).json({ success: false, message: "This test is not assigned to your account." });
+      if (assignment.dueAt && new Date(assignment.dueAt) < new Date()) return res.status(409).json({ success: false, message: "The test deadline has passed." });
+      board = assignment.board;
+      subject = assignment.subject;
+      year = assignment.quizConfig?.year;
+      season = assignment.quizConfig?.season;
+      paperName = assignment.quizConfig?.paperName;
+      variant = assignment.quizConfig?.variant;
+    }
 
     /* ===============================
        STEP 1: VALIDATION
@@ -34,11 +55,10 @@ exports.getQuizQuestions = async (req, res) => {
       });
     }
 
-    const access = await getUserContext(req);
-    if (!access.isAdmin && !access.features.includes("mcq")) {
+    if (!assignedAccess && !access.isAdmin && !access.features.includes("mcq")) {
       return res.status(403).json({ success: false, message: "Your plan does not include MCQ tests." });
     }
-    if (!assertSubscriptionScope(access, board, subject)) {
+    if (!assignedAccess && !assertSubscriptionScope(access, board, subject)) {
       return res.status(403).json({ success: false, message: "This board or subject is outside your plan." });
     }
 

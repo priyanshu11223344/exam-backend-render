@@ -3,6 +3,7 @@
 const Plan = require("../models/Plan");
 const getOrCreateUser = require("../utils/getOrCreateUser");
 const User = require("../models/User");
+const Board = require("../models/Board");
 
 
 // ✅ GET CURRENT USER (Dashboard Data)
@@ -61,12 +62,15 @@ exports.getMe = async (req, res) => {
       data: {
 
         // 👤 USER INFO
+        _id: user._id,
         name: user.name || "",
         email: user.email || "",
         age: user.age || "",
         board: user.board || "",
         school: user.school || "",
         studentClass: user.studentClass || "",
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt,
 
         // 🧠 ROLE
         role: user.role || "user",
@@ -114,6 +118,25 @@ exports.updateMe = async (req, res) => {
         updates[field] = req.body[field];
       }
     });
+
+    if (updates.board) {
+      const boardExists = await Board.exists({ name: updates.board });
+      if (!boardExists) {
+        return res.status(400).json({ success: false, error: "Select a valid board." });
+      }
+    }
+
+    if (updates.studentClass && !/^(?:[1-9]|1[0-2])$/.test(String(updates.studentClass))) {
+      return res.status(400).json({ success: false, error: "Class must be between 1 and 12." });
+    }
+
+    if (updates.age !== undefined && updates.age !== "") {
+      const age = Number(updates.age);
+      if (!Number.isInteger(age) || age < 4 || age > 100) {
+        return res.status(400).json({ success: false, error: "Enter a valid age." });
+      }
+      updates.age = age;
+    }
 
     const updatedUser = await User.findByIdAndUpdate(
       user._id,

@@ -5,6 +5,7 @@ const {
   updateSessionRemark,
   getStudentSessions,
   uploadTeacherQuestions,
+  getStudentWorkspace,
 } = require("../controllers/teacher.controller");
 
 const router = express.Router();
@@ -15,5 +16,6 @@ router.post("/upload-questions", requireUser(["teacher", "admin"]), uploadTeache
 router.post("/sessions", requireUser(["teacher", "admin"]), createSession);
 router.put("/sessions/:sessionId/remarks", requireUser(["teacher", "admin"]), updateSessionRemark);
 router.get("/student-sessions", requireUser(), getStudentSessions);
+router.get("/student-workspace", requireUser(["user", "admin"]), getStudentWorkspace);
 
 module.exports = router;
