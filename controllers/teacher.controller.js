@@ -1,6 +1,8 @@
 const User = require("../models/User");
 const TeacherAssignment = require("../models/TeacherAssignment");
 const ClassSession = require("../models/ClassSession");
+const Board = require("../models/Board");
+const Subject = require("../models/Subject");
 const mongoose = require("mongoose");
 const { processPaperRow } = require("../services/paperUploadService");
 
@@ -74,7 +76,7 @@ const getAssignmentForEmail = async (email) => {
 
 exports.assignTeacher = async (req, res) => {
   try {
-    const { teacherId, teacherEmail, teacherName, board, classes } = req.body;
+    const { teacherId, teacherEmail, teacherName, board, classes, mergeClasses = false } = req.body;
 
     if ((!teacherId && !teacherEmail) || !board) {
       return res.status(400).json({
@@ -92,7 +94,46 @@ exports.assignTeacher = async (req, res) => {
       });
     }
 
+    if (normalizedClasses.some((entry) => !entry.subjects.length)) {
+      return res.status(400).json({
+        success: false,
+        error: "Assign at least one subject for every selected class.",
+      });
+    }
+
+    const boardDocument = await Board.findOne({ name: board }).select("_id").lean();
+    if (!boardDocument) {
+      return res.status(400).json({ success: false, error: "Selected board does not exist." });
+    }
+
+    const requestedSubjects = [...new Set(normalizedClasses.flatMap((entry) => entry.subjects))];
+    const validSubjects = await Subject.find({
+      board: boardDocument._id,
+      name: { $in: requestedSubjects },
+    }).select("name").lean();
+    const validSubjectNames = new Set(validSubjects.map((subject) => subject.name));
+    const invalidSubjects = requestedSubjects.filter((subject) => !validSubjectNames.has(subject));
+    if (invalidSubjects.length) {
+      return res.status(400).json({
+        success: false,
+        error: `Invalid subject selection for ${board}: ${invalidSubjects.join(", ")}`,
+      });
+    }
+
     const teacher = await getTeacherUser({ teacherId, teacherEmail, teacherName });
+
+    let classesToSave = normalizedClasses;
+    if (mergeClasses) {
+      const existingAssignment = await TeacherAssignment.findOne({
+        teacherEmail: teacher.email.toLowerCase(),
+        board,
+      }).lean();
+      const mergedClasses = new Map(
+        (existingAssignment?.classes || []).map((entry) => [entry.className, entry])
+      );
+      normalizedClasses.forEach((entry) => mergedClasses.set(entry.className, entry));
+      classesToSave = [...mergedClasses.values()];
+    }
 
     const assignment = await TeacherAssignment.findOneAndUpdate(
       {
@@ -105,7 +146,7 @@ exports.assignTeacher = async (req, res) => {
           teacherEmail: teacher.email.toLowerCase(),
           teacherName: teacher.name || teacherName || "Teacher",
           board,
-          classes: normalizedClasses,
+          classes: classesToSave,
           active: true,
         },
       },
@@ -281,6 +322,14 @@ exports.createSession = async (req, res) => {
       return res.status(403).json({
         success: false,
         error: "This class is not assigned to the teacher.",
+      });
+    }
+
+    const assignedClass = assignment.classes.find((entry) => entry.className === className);
+    if (assignedClass?.subjects?.length && !assignedClass.subjects.includes(subject)) {
+      return res.status(403).json({
+        success: false,
+        error: "This subject is not assigned to the teacher for the selected class.",
       });
     }
 

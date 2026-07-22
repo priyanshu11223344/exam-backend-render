@@ -1,6 +1,7 @@
 const ExamAssignment = require("../models/ExamAssignment");
 const ExamSubmission = require("../models/ExamSubmission");
 const User = require("../models/User");
+const TeacherAssignment = require("../models/TeacherAssignment");
 
 const toUploadedFile = (file) => {
   if (!file) return undefined;
@@ -48,6 +49,30 @@ exports.createAssignment = async (req, res) => {
         success: false,
         error: "Upload a question paper for paper assignments.",
       });
+    }
+
+    if (createdByRole === "teacher") {
+      const teacherAssignment = await TeacherAssignment.findOne({
+        teacherEmail: String(createdByEmail || "").toLowerCase(),
+        board,
+        "classes.className": className,
+        active: true,
+      }).lean();
+      const assignedClass = teacherAssignment?.classes?.find((entry) => entry.className === className);
+
+      if (!assignedClass) {
+        return res.status(403).json({
+          success: false,
+          error: "This class is not assigned to the teacher.",
+        });
+      }
+
+      if (assignedClass.subjects?.length && !assignedClass.subjects.includes(subject)) {
+        return res.status(403).json({
+          success: false,
+          error: "This subject is not assigned to the teacher for the selected class.",
+        });
+      }
     }
 
     let targetStudent;
