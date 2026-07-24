@@ -4,6 +4,7 @@ const User = require("../models/User");
 const TeacherAssignment = require("../models/TeacherAssignment");
 const Paper = require("../models/Paper");
 const storeUploadedFile = require("../utils/storeUploadedFile");
+const { readStoredPaper, validateUploadedPaper } = require("../utils/paperFile");
 const fs = require("fs/promises");
 
 const cleanupUploads = async (files) => Promise.all((files || []).map((file) => fs.unlink(file.path).catch(() => {})));
@@ -88,6 +89,19 @@ exports.createAssignment = async (req, res) => {
         success: false,
         error: "Upload a question paper file or provide a test link.",
       });
+    }
+
+    if (type === "paper" && req.file) {
+      try {
+        const detectedPaper = await validateUploadedPaper(req.file);
+        req.file.mimetype = detectedPaper.mimeType;
+      } catch (validationError) {
+        await cleanupUploads([req.file]);
+        return res.status(400).json({
+          success: false,
+          error: validationError.message,
+        });
+      }
     }
 
     if (actorRole === "teacher") {
@@ -247,8 +261,18 @@ exports.getAssignments = async (req, res) => {
         }).select("assignment").lean()).map((submission) => String(submission.assignment))
       );
       visibleAssignments = assignments.map((assignment) => {
-        if (submittedAssignmentIds.has(String(assignment._id))) return assignment;
-        const { markingSchemeLink: _hiddenMarkingScheme, ...safeAssignment } = assignment;
+        const safeAssignment = { ...assignment };
+        if (safeAssignment.questionPaper) {
+          safeAssignment.questionPaper = {
+            originalName: safeAssignment.questionPaper.originalName,
+            mimeType: safeAssignment.questionPaper.mimeType,
+            size: safeAssignment.questionPaper.size,
+            available: true,
+          };
+        }
+        if (!submittedAssignmentIds.has(String(assignment._id))) {
+          delete safeAssignment.markingSchemeLink;
+        }
         return safeAssignment;
       });
     }
@@ -263,6 +287,66 @@ exports.getAssignments = async (req, res) => {
     res.status(500).json({
       success: false,
       error: err.message,
+    });
+  }
+};
+
+exports.viewQuestionPaper = async (req, res) => {
+  try {
+    const assignment = await ExamAssignment.findById(req.params.assignmentId).lean();
+    if (!assignment || assignment.type !== "paper" || !assignment.questionPaper) {
+      return res.status(404).json({ success: false, error: "Question paper not found." });
+    }
+
+    const currentUser = req.currentUser;
+    let canView = ["admin", "staff"].includes(currentUser.role);
+
+    if (currentUser.role === "user") {
+      canView = studentCanAccessAssignment(assignment, currentUser);
+    } else if (currentUser.role === "teacher") {
+      const teacherEmail = String(currentUser.email || "").toLowerCase();
+      canView = assignment.createdByEmail === teacherEmail;
+      if (!canView) {
+        const teacherAssignment = await TeacherAssignment.findOne({
+          teacherEmail,
+          board: assignment.board,
+          "classes.className": assignment.className,
+          active: true,
+        }).lean();
+        const assignedClass = teacherAssignment?.classes?.find(
+          (entry) => String(entry.className) === String(assignment.className)
+        );
+        canView = Boolean(
+          assignedClass &&
+          (!assignedClass.subjects?.length || assignedClass.subjects.includes(assignment.subject))
+        );
+      }
+    }
+
+    if (!canView) {
+      return res.status(403).json({ success: false, error: "You cannot access this question paper." });
+    }
+
+    const paper = await readStoredPaper(assignment.questionPaper);
+    const baseName = String(assignment.title || "question-paper")
+      .replace(/[^a-z0-9_-]+/gi, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 80) || "question-paper";
+
+    res.set({
+      "Content-Type": paper.mimeType,
+      "Content-Disposition": `inline; filename="${baseName}.${paper.extension}"`,
+      "Content-Length": String(paper.buffer.length),
+      "Cache-Control": "private, no-store, max-age=0",
+      Pragma: "no-cache",
+      "X-Content-Type-Options": "nosniff",
+    });
+    return res.send(paper.buffer);
+  } catch (err) {
+    const status = err.name === "TimeoutError" ? 504 : 502;
+    return res.status(status).json({
+      success: false,
+      error: status === 504 ? "Question paper storage timed out." : err.message,
     });
   }
 };

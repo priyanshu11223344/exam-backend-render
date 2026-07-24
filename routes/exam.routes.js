@@ -6,6 +6,7 @@ const {
   submitAnswerSheets,
   submitQuizResult,
   getMySubmissions,
+  viewQuestionPaper,
 } = require("../controllers/exam.controller");
 
 const router = express.Router();
@@ -15,12 +16,13 @@ const upload = multer({
   dest: "uploads/",
   limits: { fileSize: 15 * 1024 * 1024, files: 10 },
   fileFilter: (_req, file, callback) => {
-    const allowed = file.mimetype === "application/pdf" || file.mimetype.startsWith("image/");
-    callback(allowed ? null : new Error("Only PDF and image files are allowed."), allowed);
+    const allowed = ["application/pdf", "image/png", "image/jpeg"].includes(file.mimetype);
+    callback(allowed ? null : new Error("Only PDF, PNG, and JPEG files are allowed."), allowed);
   },
 });
 
 router.get("/assignments", requireUser(), getAssignments);
+router.get("/assignments/:assignmentId/paper", requireUser(), viewQuestionPaper);
 router.post(
   "/assignments",
   requireUser(["admin", "staff", "teacher"]),
