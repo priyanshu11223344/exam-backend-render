@@ -76,6 +76,22 @@ const examAssignmentSchema = new mongoose.Schema(
       variant: String,
     },
     questionPaper: uploadedFileSchema,
+    testLink: {
+      type: String,
+      default: "",
+      trim: true,
+      maxlength: 2000,
+    },
+    maximumMarks: {
+      type: Number,
+      min: 1,
+    },
+    markingSchemeLink: {
+      type: String,
+      default: "",
+      trim: true,
+      maxlength: 2000,
+    },
     createdByRole: {
       type: String,
       enum: ["admin", "teacher"],

@@ -85,6 +85,13 @@ const getAssignmentForEmail = async (email) => {
   }).lean();
 };
 
+const getAssignmentsForEmail = async (email) => {
+  return TeacherAssignment.find({
+    teacherEmail: String(email || "").toLowerCase(),
+    active: true,
+  }).sort({ board: 1 }).lean();
+};
+
 exports.assignTeacher = async (req, res) => {
   try {
     const { teacherId, teacherEmail, teacherName, board, classes, mergeClasses = false } = req.body;
@@ -202,26 +209,32 @@ exports.getTeacherContext = async (req, res) => {
       return res.status(400).json({ success: false, error: "Teacher email is required." });
     }
 
-    const assignment = await getAssignmentForEmail(email);
+    const assignments = await getAssignmentsForEmail(email);
+    const assignment = assignments[0] || null;
 
-    if (!assignment) {
+    if (!assignments.length) {
       return res.json({
         success: true,
         data: {
           assignment: null,
+          assignments: [],
           students: [],
           sessions: [],
         },
       });
     }
 
-    const classNames = assignment.classes.map((entry) => entry.className);
+    const studentScopes = assignments.flatMap((entry) =>
+      entry.classes.map((assignedClass) => ({
+        board: entry.board,
+        studentClass: assignedClass.className,
+      }))
+    );
 
     const [students, sessions] = await Promise.all([
       User.find({
         role: "user",
-        board: assignment.board,
-        studentClass: { $in: classNames },
+        $or: studentScopes,
       })
         .sort({ studentClass: 1, name: 1 })
         .limit(500)
@@ -237,6 +250,7 @@ exports.getTeacherContext = async (req, res) => {
       success: true,
       data: {
         assignment,
+        assignments,
         students,
         sessions,
       },
@@ -301,20 +315,28 @@ exports.uploadTeacherQuestions = async (req, res) => {
       return res.status(400).json({ success: false, error: "Questions array is required." });
     }
 
-    const assignment = await getAssignmentForEmail(teacherEmail);
+    const assignments = await getAssignmentsForEmail(teacherEmail);
 
-    if (!assignment) {
+    if (!assignments.length) {
       await session.abortTransaction();
       session.endSession();
       return res.status(403).json({ success: false, error: "This teacher has no active class assignment." });
     }
 
-    const allowedSubjects = new Set(assignment.classes.flatMap((entry) => entry.subjects || []));
-    const invalidRow = rows.find((row) => allowedSubjects.size && !allowedSubjects.has(String(row.subject || "").trim()));
+    const assignmentByBoard = new Map(assignments.map((entry) => [entry.board, entry]));
+    const invalidRow = rows.find((row) => {
+      const teacherAssignment = assignmentByBoard.get(String(row.board || "").trim());
+      if (!teacherAssignment) return true;
+      const allowedSubjects = new Set(teacherAssignment.classes.flatMap((entry) => entry.subjects || []));
+      return allowedSubjects.size && !allowedSubjects.has(String(row.subject || "").trim());
+    });
     if (invalidRow) {
       await session.abortTransaction();
       session.endSession();
-      return res.status(403).json({ success: false, error: `Subject ${invalidRow.subject || "(missing)"} is not assigned to this teacher.` });
+      return res.status(403).json({
+        success: false,
+        error: `Board/subject ${invalidRow.board || "(missing)"} / ${invalidRow.subject || "(missing)"} is not assigned to this teacher.`,
+      });
     }
 
     let inserted = 0;
@@ -322,10 +344,7 @@ exports.uploadTeacherQuestions = async (req, res) => {
     let skipped = 0;
 
     for (const row of rows) {
-      const questionRow = {
-        ...row,
-        board: assignment.board,
-      };
+      const questionRow = { ...row, board: String(row.board || "").trim() };
 
       const result = await processPaperRow(questionRow, session);
 

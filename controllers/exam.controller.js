@@ -7,6 +7,16 @@ const storeUploadedFile = require("../utils/storeUploadedFile");
 const fs = require("fs/promises");
 
 const cleanupUploads = async (files) => Promise.all((files || []).map((file) => fs.unlink(file.path).catch(() => {})));
+const normalizeWebUrl = (value) => {
+  const normalized = String(value || "").trim();
+  if (!normalized) return "";
+  try {
+    const parsed = new URL(normalized);
+    return ["http:", "https:"].includes(parsed.protocol) ? parsed.toString() : "";
+  } catch {
+    return "";
+  }
+};
 
 const studentCanAccessAssignment = (assignment, user) => {
   if (!assignment || !user) return false;
@@ -41,6 +51,9 @@ exports.createAssignment = async (req, res) => {
       targetStudentId,
       targetStudentEmail,
       targetStudentName,
+      testLink,
+      maximumMarks,
+      markingSchemeLink,
     } = req.body;
     const actorRole = req.currentUser?.role || createdByRole;
     const actorEmail = String(req.currentUser?.email || createdByEmail || "").toLowerCase();
@@ -53,10 +66,27 @@ exports.createAssignment = async (req, res) => {
       });
     }
 
-    if (type === "paper" && !req.file) {
+    const normalizedTestLink = normalizeWebUrl(testLink);
+    const normalizedMarkingSchemeLink = normalizeWebUrl(markingSchemeLink);
+    const parsedMaximumMarks = Number(maximumMarks);
+
+    if (testLink && !normalizedTestLink) {
+      await cleanupUploads(req.file ? [req.file] : []);
+      return res.status(400).json({ success: false, error: "Enter a valid test link using http or https." });
+    }
+    if (markingSchemeLink && !normalizedMarkingSchemeLink) {
+      await cleanupUploads(req.file ? [req.file] : []);
+      return res.status(400).json({ success: false, error: "Enter a valid marking scheme link using http or https." });
+    }
+    if (maximumMarks && (!Number.isFinite(parsedMaximumMarks) || parsedMaximumMarks <= 0)) {
+      await cleanupUploads(req.file ? [req.file] : []);
+      return res.status(400).json({ success: false, error: "Maximum marks must be greater than zero." });
+    }
+
+    if (type === "paper" && !req.file && !normalizedTestLink) {
       return res.status(400).json({
         success: false,
-        error: "Upload a question paper for paper assignments.",
+        error: "Upload a question paper file or provide a test link.",
       });
     }
 
@@ -130,7 +160,9 @@ exports.createAssignment = async (req, res) => {
       };
     }
 
-    const storedQuestionPaper = type === "paper" ? await storeUploadedFile(req.file, "aurethia/assignments") : undefined;
+    const storedQuestionPaper = type === "paper" && req.file
+      ? await storeUploadedFile(req.file, "aurethia/assignments")
+      : undefined;
     const assignment = await ExamAssignment.create({
       title,
       type,
@@ -143,6 +175,9 @@ exports.createAssignment = async (req, res) => {
       durationMinutes: durationMinutes ? Number(durationMinutes) : undefined,
       quizConfig: type === "quiz" ? { year, season, paperName, variant } : undefined,
       questionPaper: storedQuestionPaper,
+      testLink: normalizedTestLink,
+      maximumMarks: maximumMarks ? parsedMaximumMarks : undefined,
+      markingSchemeLink: normalizedMarkingSchemeLink,
       targetStudent,
       createdByRole: actorRole === "teacher" ? "teacher" : "admin",
       createdByEmail: actorEmail,
@@ -203,10 +238,25 @@ exports.getAssignments = async (req, res) => {
       ExamAssignment.countDocuments(filter),
     ]);
 
+    let visibleAssignments = assignments;
+    if (req.currentUser?.role === "user") {
+      const submittedAssignmentIds = new Set(
+        (await ExamSubmission.find({
+          userEmail: String(req.currentUser.email || "").toLowerCase(),
+          assignment: { $in: assignments.map((assignment) => assignment._id) },
+        }).select("assignment").lean()).map((submission) => String(submission.assignment))
+      );
+      visibleAssignments = assignments.map((assignment) => {
+        if (submittedAssignmentIds.has(String(assignment._id))) return assignment;
+        const { markingSchemeLink: _hiddenMarkingScheme, ...safeAssignment } = assignment;
+        return safeAssignment;
+      });
+    }
+
     res.json({
       success: true,
-      count: assignments.length,
-      data: assignments,
+      count: visibleAssignments.length,
+      data: visibleAssignments,
       pagination: { page, limit, total, pages: Math.ceil(total / limit) },
     });
   } catch (err) {
@@ -356,7 +406,12 @@ exports.getMySubmissions = async (req, res) => {
     const page = Math.max(1, Number(req.query.page) || 1);
     const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 25));
     const [data, total] = await Promise.all([
-      ExamSubmission.find({ userEmail }).populate("assignment", "title subject className dueAt type").sort({ updatedAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+      ExamSubmission.find({ userEmail })
+        .populate("assignment", "title subject className dueAt type createdAt maximumMarks markingSchemeLink testLink")
+        .sort({ updatedAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean(),
       ExamSubmission.countDocuments({ userEmail }),
     ]);
     return res.json({ success: true, data, pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
